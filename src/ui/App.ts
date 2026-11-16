@@ -1,8 +1,9 @@
-import { CommandHistory, SetCodeCommand } from '../core/Command';
+import { CommandHistory, MoveNodeCommand, SetCodeCommand } from '../core/Command';
 import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
+import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
 import { RenderEngine } from '../render/RenderEngine';
-import { detectDiagramType } from '../render/diagramTypes';
+import { type DiagramType, detectDiagramType } from '../render/diagramTypes';
 
 const SAMPLE_CODE = `classDiagram
   class Animal {
@@ -18,20 +19,34 @@ const SAMPLE_CODE = `classDiagram
 const RENDER_DEBOUNCE_MS = 150;
 const HISTORY_DEBOUNCE_MS = 400;
 
+const HINTS: Record<DiagramType, string> = {
+  class: '노드 드래그로 이동 · 선택 후 □ 핸들로 크기 조절',
+  sequence: '시퀀스 다이어그램은 아직 GUI 편집을 지원하지 않습니다',
+};
+
 /** UI 계층: 코드 에디터와 캔버스를 항상 함께 표시한다 (REQ-10). */
 export class App {
   private model = new DiagramModel({ code: SAMPLE_CODE });
   private history = new CommandHistory();
   private engine = new RenderEngine();
+  private overlay = new ClassDiagramOverlay({
+    onLayoutCommit: (nodeId, layout) => {
+      this.flushPendingInput();
+      this.history.execute(new MoveNodeCommand(this.model, nodeId, layout));
+      this.updateButtons();
+    },
+  });
 
   private textarea!: HTMLTextAreaElement;
   private canvas!: HTMLDivElement;
   private status!: HTMLSpanElement;
+  private hint!: HTMLSpanElement;
   private undoButton!: HTMLButtonElement;
   private redoButton!: HTMLButtonElement;
 
   private committedCode = SAMPLE_CODE;
   private lastSvg = '';
+  private lastType: DiagramType | null = null;
   private renderToken = 0;
   private renderTimer: number | undefined;
   private historyTimer: number | undefined;
@@ -44,6 +59,7 @@ export class App {
         <button data-action="undo">실행 취소 (Ctrl+Z)</button>
         <button data-action="redo">다시 실행 (Ctrl+Y)</button>
         <button data-action="export-mermaid">Mermaid 코드 내보내기</button>
+        <span class="hint"></span>
         <span class="status"></span>
       </div>
       <div class="panes">
@@ -54,16 +70,24 @@ export class App {
     this.textarea = this.root.querySelector('textarea')!;
     this.canvas = this.root.querySelector('.canvas-pane')!;
     this.status = this.root.querySelector('.status')!;
+    this.hint = this.root.querySelector('.hint')!;
     this.undoButton = this.root.querySelector('[data-action="undo"]')!;
     this.redoButton = this.root.querySelector('[data-action="redo"]')!;
 
     this.textarea.value = this.model.getState().code;
 
     // 모델 변경 → 에디터 반영 + 렌더링 (Observer)
+    let renderedCode = this.model.getState().code;
     this.model.subscribe((state) => {
       if (this.textarea.value !== state.code) this.textarea.value = state.code;
       this.committedCode = state.code;
-      this.scheduleRender();
+      if (state.code !== renderedCode) {
+        renderedCode = state.code;
+        this.scheduleRender();
+      } else {
+        // 위치·크기만 바뀐 경우: Mermaid를 다시 돌리지 않고 오버레이만 다시 적용한다.
+        this.showDiagram();
+      }
       this.updateButtons();
     });
 
@@ -134,7 +158,8 @@ export class App {
       const { svg } = await this.engine.render(source);
       if (token !== this.renderToken) return; // 더 최신 렌더 요청이 있으면 버린다
       this.lastSvg = svg;
-      this.canvas.innerHTML = svg;
+      this.lastType = type;
+      this.showDiagram();
       this.status.textContent = `${type} · 렌더 ${Math.round(performance.now() - startedAt)}ms`;
     } catch (error) {
       if (token !== this.renderToken) return;
@@ -142,7 +167,22 @@ export class App {
     }
   }
 
+  /** 마지막으로 렌더링한 SVG를 캔버스에 놓고, 저장된 노드 위치·크기를 오버레이로 적용한다. */
+  private showDiagram(): void {
+    this.overlay.detach();
+    if (!this.lastSvg) return;
+    this.canvas.innerHTML = this.lastSvg;
+    this.hint.textContent = this.lastType ? HINTS[this.lastType] : '';
+    const svg = this.canvas.querySelector('svg');
+    if (svg && this.lastType === 'class') {
+      this.overlay.attach(svg, this.model.getState().nodeLayouts);
+    }
+  }
+
   private showError(message: string): void {
+    this.overlay.detach();
+    this.lastSvg = '';
+    this.hint.textContent = '';
     this.canvas.innerHTML = '';
     const el = document.createElement('div');
     el.className = 'error';
