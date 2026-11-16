@@ -21,12 +21,14 @@ npm run build    # 타입 검사 + 프로덕션 빌드
 - 옮긴 노드에 연결된 선이 따라옴 (REQ-04 기본형: 노드 테두리끼리 직선으로 연결)
 - 노드 위치·크기는 코드와 별도로 저장되어 코드를 고쳐도 유지 (REQ-03)
 - 노드 이동·크기 조절도 실행 취소 대상 (`MoveNodeCommand`, REQ-11)
+- 연결선 꺾임점 조정 (REQ-05) — 선을 끌면 꺾임점이 생기고, 꺾임점을 끌어 이동, 꺾임점 더블클릭으로 삭제 (선 더블클릭으로도 추가).
+  꺾임점은 `edgePaths`에 "출발노드->도착노드#순번" 이름으로 저장되어 코드를 고쳐도 유지되며, 실행 취소 가능 (`SetEdgePathCommand`)
 - 코드 수정에 대한 실행 취소(Ctrl+Z) / 다시 실행(Ctrl+Y) (REQ-11, 코드 수정만)
 - JSON 저장·불러오기 로직 (REQ-12, UI 연결 전 — `DiagramModel.toJSON / fromJSON`)
 - Mermaid 코드(.mmd) 내보내기 (REQ-08 일부)
 - 화면 상단에 렌더링 시간 표시 (성능 기준 실측용)
 
-아직 없는 것: 시퀀스 다이어그램 GUI 편집, 엣지 경로 조정(REQ-05), 폰트 스케일링(REQ-06), PNG/JPG 내보내기(REQ-08), 흑백 4색 테마(REQ-09).
+아직 없는 것: 시퀀스 다이어그램 GUI 편집, 자기 자신으로 가는 선(self-loop) 편집, 폰트 스케일링(REQ-06), PNG/JPG 내보내기(REQ-08), 흑백 4색 테마(REQ-09).
 
 ## 폴더 구조 (아키텍처의 4계층)
 
@@ -35,7 +37,7 @@ src/
 ├── ui/        UI 계층      화면 구성, 이벤트 처리 (App.ts)
 ├── core/      코어 계층    다이어그램 모델, Observer, Command (실행 취소)
 ├── render/    렌더링 계층  RenderEngine(Facade), 다이어그램 유형 판별
-├── overlay/   렌더링 계층  Mermaid 위 오버레이 (ClassDiagramOverlay: 드래그·크기 조절)
+├── overlay/   렌더링 계층  Mermaid 위 오버레이 (ClassDiagramOverlay: 드래그·크기 조절·꺾임점)
 ├── export/    내보내기 계층  ExportStrategy (Strategy)
 └── main.ts    진입점
 ```

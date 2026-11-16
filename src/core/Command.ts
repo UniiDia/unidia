@@ -1,4 +1,4 @@
-import type { DiagramModel, NodeLayout } from './DiagramModel';
+import type { DiagramModel, NodeLayout, Point } from './DiagramModel';
 
 /** Command 패턴: 편집 동작을 객체로 만들어 실행 취소/재실행을 지원한다 (REQ-11). */
 export interface Command {
@@ -74,5 +74,26 @@ export class MoveNodeCommand implements Command {
 
   undo(): void {
     this.model.setNodeLayout(this.nodeId, this.prev);
+  }
+}
+
+/** 연결선 꺾임점 추가·이동·삭제 (REQ-05). next가 undefined면 꺾임점을 모두 지운다. */
+export class SetEdgePathCommand implements Command {
+  private prev: Point[] | undefined;
+
+  constructor(
+    private model: DiagramModel,
+    private edgeId: string,
+    private next: Point[] | undefined,
+  ) {
+    this.prev = model.getState().edgePaths[edgeId];
+  }
+
+  execute(): void {
+    this.model.setEdgePath(this.edgeId, this.next);
+  }
+
+  undo(): void {
+    this.model.setEdgePath(this.edgeId, this.prev);
   }
 }

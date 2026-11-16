@@ -1,4 +1,4 @@
-import { CommandHistory, MoveNodeCommand, SetCodeCommand } from '../core/Command';
+import { CommandHistory, MoveNodeCommand, SetCodeCommand, SetEdgePathCommand } from '../core/Command';
 import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
 import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
@@ -20,7 +20,7 @@ const RENDER_DEBOUNCE_MS = 150;
 const HISTORY_DEBOUNCE_MS = 400;
 
 const HINTS: Record<DiagramType, string> = {
-  class: '노드 드래그로 이동 · 선택 후 □ 핸들로 크기 조절',
+  class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제',
   sequence: '시퀀스 다이어그램은 아직 GUI 편집을 지원하지 않습니다',
 };
 
@@ -33,6 +33,11 @@ export class App {
     onLayoutCommit: (nodeId, layout) => {
       this.flushPendingInput();
       this.history.execute(new MoveNodeCommand(this.model, nodeId, layout));
+      this.updateButtons();
+    },
+    onEdgePathCommit: (edgeKey, waypoints) => {
+      this.flushPendingInput();
+      this.history.execute(new SetEdgePathCommand(this.model, edgeKey, waypoints));
       this.updateButtons();
     },
   });
@@ -175,7 +180,8 @@ export class App {
     this.hint.textContent = this.lastType ? HINTS[this.lastType] : '';
     const svg = this.canvas.querySelector('svg');
     if (svg && this.lastType === 'class') {
-      this.overlay.attach(svg, this.model.getState().nodeLayouts);
+      const { nodeLayouts, edgePaths } = this.model.getState();
+      this.overlay.attach(svg, nodeLayouts, edgePaths);
     }
   }
 
