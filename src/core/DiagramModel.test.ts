@@ -49,4 +49,54 @@ describe('DiagramModel', () => {
     expect(() => DiagramModel.fromJSON('{"foo": 1}')).toThrow();
     expect(() => DiagramModel.fromJSON('not json')).toThrow();
   });
+
+  it('같은 노드 위치·엣지 경로면 알리지 않는다', () => {
+    const model = new DiagramModel({ code: 'a' });
+    model.setNodeLayout('n1', { x: 1, y: 2 });
+    model.setEdgePath('e1', [{ x: 0, y: 0 }]);
+    const listener = vi.fn();
+    model.subscribe(listener);
+
+    model.setNodeLayout('n1', { x: 1, y: 2 });
+    model.setEdgePath('e1', [{ x: 0, y: 0 }]);
+    model.setNodeLayout('none', undefined);
+    expect(listener).not.toHaveBeenCalled();
+
+    model.setNodeLayout('n1', { x: 3, y: 2 });
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('load()는 구독을 유지한 채 상태를 바꾸고 구독자에게 알린다 (REQ-12)', () => {
+    const source = new DiagramModel({ code: 'classDiagram' });
+    source.setNodeLayout('n1', { x: 1, y: 2 });
+    const target = new DiagramModel({ code: 'old' });
+    const listener = vi.fn();
+    target.subscribe(listener);
+
+    target.load(source.toJSON());
+    expect(target.getState()).toEqual(source.getState());
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('load()가 실패하면 기존 상태가 그대로 유지된다', () => {
+    const model = new DiagramModel({ code: 'keep' });
+    const listener = vi.fn();
+    model.subscribe(listener);
+    expect(() => model.load('{"foo": 1}')).toThrow();
+    expect(model.getState().code).toBe('keep');
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('지원하지 않는 버전이나 잘못된 위치·경로 형식은 불러오기에 실패한다', () => {
+    expect(() => DiagramModel.fromJSON('{"version": 2, "code": "a"}')).toThrow();
+    expect(() => DiagramModel.fromJSON('{"code": "a", "nodeLayouts": []}')).toThrow();
+    expect(() => DiagramModel.fromJSON('{"code": "a", "nodeLayouts": {"n1": {"x": "1", "y": 2}}}')).toThrow();
+    expect(() => DiagramModel.fromJSON('{"code": "a", "edgePaths": {"e1": [{"x": 1}]}}')).toThrow();
+    expect(() => DiagramModel.fromJSON('null')).toThrow();
+  });
+
+  it('version 필드가 없는 파일도 불러온다', () => {
+    const model = DiagramModel.fromJSON('{"code": "a"}');
+    expect(model.getState()).toEqual({ code: 'a', nodeLayouts: {}, edgePaths: {} });
+  });
 });

@@ -17,8 +17,9 @@ npm run build    # 타입 검사 + 프로덕션 빌드
 
 - 코드 입력 → Mermaid 렌더링 (클래스·시퀀스 다이어그램만 허용, REQ-01, REQ-07)
 - 코드 에디터와 캔버스를 항상 함께 표시 (REQ-10)
-- 코드 수정에 대한 실행 취소(Ctrl+Z) / 다시 실행(Ctrl+Y) (REQ-11, 코드 수정만)
-- JSON 저장·불러오기 로직 (REQ-12, UI 연결 전 — `DiagramModel.toJSON / fromJSON`)
+- 코드 수정에 대한 실행 취소(Ctrl+Z) / 다시 실행(Ctrl+Y) (REQ-11, 화면에서는 코드 수정만 연결됨)
+- 노드 이동·엣지 경로 수정 Command (`MoveNodeCommand`, `SetEdgePathCommand`, REQ-11) — core에는 있으나 오버레이·UI 연결 전
+- JSON 저장·불러오기 로직 (REQ-12, UI 연결 전 — `DiagramModel.toJSON / load / fromJSON`). 불러오기는 파일 버전과 노드·엣지 형식을 검사하며, `load()`는 구독을 유지한 채 상태를 바꾼다
 - Mermaid 코드(.mmd) 내보내기 (REQ-08 일부)
 - 화면 상단에 렌더링 시간 표시 (성능 기준 실측용)
 
@@ -50,7 +51,9 @@ src/
    Mermaid SVG에서 노드·엣지를 식별하고, 노드 드래그 시 엣지가 따라오는지, 노드 30개에서 평균 55fps 이상인지 확인한다.
 2. PNG/JPG 내보내기 (폭 2000px 이상). Mermaid의 htmlLabels(foreignObject)가 canvas 변환에서 문제를 일으킬 수 있어 브라우저별 확인이 필요하다.
 3. 저장·불러오기 UI 연결 (REQ-12).
-4. 노드 이동을 `MoveNodeCommand`로 기록해 GUI 편집도 실행 취소 대상에 포함 (REQ-11).
+4. 오버레이·UI에서 `MoveNodeCommand` / `SetEdgePathCommand`를 연결해 GUI 편집도 실행 취소 대상에 포함 (REQ-11).
+   드래그 중에는 모델을 직접 바꿔 미리보기를 보여주고, 드래그가 끝나면 시작 위치를 `{ prev }`로 넘겨 한 번만 기록한다.
+   파일을 불러온 뒤에는 `model.load(json)`과 `history.clear()`를 함께 호출한다.
 
 ## 기술 선택에 대해
 
