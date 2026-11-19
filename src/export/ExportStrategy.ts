@@ -135,9 +135,8 @@ function prepareSvg(svgText: string, minWidth: number, replaceForeignObjects: bo
     height: box.height + EXPORT_PADDING * 2,
   };
 
-  const scale = computeScale(padded.width, padded.height, minWidth);
-  const width = Math.round(padded.width * scale);
-  const height = Math.round(padded.height * scale);
+  // 폭 기준을 맞출 수 없으면 여기서 ExportSizeError를 던진다 (대체 경로로 재시도하지 않음).
+  const { width, height } = computeExportSize(padded.width, padded.height, minWidth);
 
   svg.setAttribute('xmlns', SVG_NS);
   svg.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
@@ -166,12 +165,50 @@ function readViewBox(svg: SVGSVGElement): { x: number; y: number; width: number;
   return { x: 0, y: 0, width, height };
 }
 
-/** 폭이 minWidth 이상이 되도록 배율을 정하되, canvas 한계를 넘지 않게 제한한다. */
-function computeScale(width: number, height: number, minWidth: number): number {
+/**
+ * canvas 한계 때문에 최소 폭(REQ-08)을 맞출 수 없을 때 던지는 오류.
+ * 예: 세로로 매우 긴 시퀀스 다이어그램은 폭을 2000px로 키우면 세로가 16384px을 넘는다.
+ * 기준 미달 이미지를 조용히 내보내지 않도록 내보내기를 중단한다.
+ */
+export class ExportSizeError extends Error {
+  constructor(
+    /** 요구한 최소 폭(px) */
+    readonly minWidth: number,
+    /** canvas 한계 안에서 낼 수 있는 최대 폭(px) */
+    readonly maxWidth: number,
+  ) {
+    super(
+      `다이어그램이 너무 길어 폭 ${minWidth}px 이상으로 내보낼 수 없습니다 ` +
+        `(canvas 한 변 최대 ${MAX_CANVAS_SIDE}px, 가능한 최대 폭 ${maxWidth}px). ` +
+        `다이어그램을 나누어 내보내 주세요.`,
+    );
+    this.name = 'ExportSizeError';
+  }
+}
+
+export interface ExportSize {
+  /** 출력 픽셀 크기 */
+  width: number;
+  height: number;
+  /** SVG 단위 → 픽셀 배율 */
+  scale: number;
+}
+
+/**
+ * 출력 크기를 계산한다. 폭이 minWidth 이상이 되도록 배율을 정하되, canvas 한계를 넘지 않게 제한한다.
+ * 제한 때문에 폭이 minWidth보다 작아지면 ExportSizeError를 던진다.
+ * (원래 폭이 이미 minWidth 이상인 큰 다이어그램은 한계에 맞춰 축소되어도 기준을 만족하므로 허용한다.)
+ */
+export function computeExportSize(width: number, height: number, minWidth: number): ExportSize {
   let scale = Math.max(1, minWidth / width);
   scale = Math.min(scale, MAX_CANVAS_SIDE / width, MAX_CANVAS_SIDE / height);
   scale = Math.min(scale, Math.sqrt(MAX_CANVAS_AREA / (width * height)));
-  return scale;
+
+  const outWidth = Math.round(width * scale);
+  const outHeight = Math.round(height * scale);
+  if (outWidth < minWidth) throw new ExportSizeError(minWidth, outWidth);
+
+  return { width: outWidth, height: outHeight, scale };
 }
 
 /**
