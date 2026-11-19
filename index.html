@@ -8,7 +8,9 @@
       * { box-sizing: border-box; }
       html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
       #app { display: flex; flex-direction: column; height: 100%; }
-      .toolbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+      .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #ddd; }
+      .toolbar .sep { width: 1px; height: 20px; background: #ddd; }
+      .toolbar .hint { margin-left: 8px; color: #888; font-size: 12px; }
       .toolbar .status { margin-left: auto; color: #666; font-size: 13px; }
       .panes { display: flex; flex: 1; min-height: 0; }
       /* REQ-10: 코드 영역과 캔버스는 항상 함께 표시 */
@@ -16,6 +18,13 @@
       .code-pane textarea { flex: 1; border: 0; padding: 12px; font: 14px/1.5 ui-monospace, monospace; resize: none; outline: none; }
       .canvas-pane { flex: 1; overflow: auto; padding: 12px; }
       .error { color: #b00020; white-space: pre-wrap; font-size: 13px; }
+      /* GUI 편집 (REQ-02) */
+      svg.unidia-editable { user-select: none; touch-action: none; }
+      svg.unidia-editable g.node { cursor: move; }
+      svg.unidia-editable .unidia-handle { cursor: nwse-resize; }
+      /* 엣지 경로 조정 (REQ-05) */
+      svg.unidia-editable .unidia-edge-hit { cursor: pointer; }
+      svg.unidia-editable .unidia-waypoint { cursor: move; }
     </style>
   </head>
   <body>

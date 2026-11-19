@@ -1,8 +1,16 @@
-import { CommandHistory, SetCodeCommand } from '../core/Command';
+import {
+  type Command,
+  CommandHistory,
+  MoveNodeCommand,
+  SetCodeCommand,
+  SetEdgePathCommand,
+} from '../core/Command';
 import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
+import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
+import { makeBenchmarkCode, runOverlayBenchmark, waitFor } from '../overlay/benchmark';
 import { RenderEngine } from '../render/RenderEngine';
-import { detectDiagramType } from '../render/diagramTypes';
+import { type DiagramType, detectDiagramType } from '../render/diagramTypes';
 
 const SAMPLE_CODE = `classDiagram
   class Animal {
@@ -18,20 +26,46 @@ const SAMPLE_CODE = `classDiagram
 const RENDER_DEBOUNCE_MS = 150;
 const HISTORY_DEBOUNCE_MS = 400;
 
+/** 주소 끝에 ?bench 를 붙이면 성능 측정 버튼이 나온다 (개발·검증용). */
+const BENCHMARK_MODE = new URLSearchParams(location.search).has('bench');
+
+const HINTS: Record<DiagramType, string> = {
+  class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제',
+  sequence: '시퀀스 다이어그램은 아직 GUI 편집을 지원하지 않습니다',
+};
+
 /** UI 계층: 코드 에디터와 캔버스를 항상 함께 표시한다 (REQ-10). */
 export class App {
   private model = new DiagramModel({ code: SAMPLE_CODE });
   private history = new CommandHistory();
   private engine = new RenderEngine();
+  /**
+   * 오버레이 편집 (UniDia 가이드 "core 사용 규칙 1"):
+   * 드래그 중에는 setNodeLayout/setEdgePath로 모델에 미리보기만 반영하고,
+   * 드래그가 끝나면 시작 전 값을 { prev }로 넘겨 히스토리에 한 번만 기록한다.
+   */
+  private overlay = new ClassDiagramOverlay({
+    onLayoutPreview: (nodeId, layout) => this.preview(() => this.model.setNodeLayout(nodeId, layout)),
+    onLayoutCommit: (nodeId, layout, prev) =>
+      this.commitOverlayEdit(new MoveNodeCommand(this.model, nodeId, layout, { prev })),
+    onEdgePathPreview: (edgeKey, waypoints) =>
+      this.preview(() => this.model.setEdgePath(edgeKey, waypoints)),
+    onEdgePathCommit: (edgeKey, waypoints, prev) =>
+      this.commitOverlayEdit(new SetEdgePathCommand(this.model, edgeKey, waypoints, { prev })),
+  });
+  /** 드래그 미리보기 중에는 오버레이가 이미 화면을 그렸으므로 다시 그리지 않는다. */
+  private previewing = false;
 
   private textarea!: HTMLTextAreaElement;
   private canvas!: HTMLDivElement;
   private status!: HTMLSpanElement;
+  private hint!: HTMLSpanElement;
   private undoButton!: HTMLButtonElement;
   private redoButton!: HTMLButtonElement;
 
   private committedCode = SAMPLE_CODE;
   private lastSvg = '';
+  private lastType: DiagramType | null = null;
   private renderToken = 0;
   private renderTimer: number | undefined;
   private historyTimer: number | undefined;
@@ -44,6 +78,8 @@ export class App {
         <button data-action="undo">실행 취소 (Ctrl+Z)</button>
         <button data-action="redo">다시 실행 (Ctrl+Y)</button>
         <button data-action="export-mermaid">Mermaid 코드 내보내기</button>
+        ${BENCHMARK_MODE ? '<button data-action="benchmark">성능 측정 (노드 30개)</button>' : ''}
+        <span class="hint"></span>
         <span class="status"></span>
       </div>
       <div class="panes">
@@ -54,16 +90,25 @@ export class App {
     this.textarea = this.root.querySelector('textarea')!;
     this.canvas = this.root.querySelector('.canvas-pane')!;
     this.status = this.root.querySelector('.status')!;
+    this.hint = this.root.querySelector('.hint')!;
     this.undoButton = this.root.querySelector('[data-action="undo"]')!;
     this.redoButton = this.root.querySelector('[data-action="redo"]')!;
 
     this.textarea.value = this.model.getState().code;
 
     // 모델 변경 → 에디터 반영 + 렌더링 (Observer)
+    let renderedCode = this.model.getState().code;
     this.model.subscribe((state) => {
+      if (this.previewing) return;
       if (this.textarea.value !== state.code) this.textarea.value = state.code;
       this.committedCode = state.code;
-      this.scheduleRender();
+      if (state.code !== renderedCode) {
+        renderedCode = state.code;
+        this.scheduleRender();
+      } else {
+        // 위치·크기만 바뀐 경우: Mermaid를 다시 돌리지 않고 오버레이만 다시 적용한다.
+        this.showDiagram();
+      }
       this.updateButtons();
     });
 
@@ -74,6 +119,9 @@ export class App {
       .querySelector('[data-action="export-mermaid"]')!
       .addEventListener('click', () => void this.exportAs('mermaid'));
     document.addEventListener('keydown', (e) => this.onKeyDown(e));
+    this.root
+      .querySelector('[data-action="benchmark"]')
+      ?.addEventListener('click', () => void this.runBenchmark());
 
     this.updateButtons();
     void this.renderNow();
@@ -134,7 +182,8 @@ export class App {
       const { svg } = await this.engine.render(source);
       if (token !== this.renderToken) return; // 더 최신 렌더 요청이 있으면 버린다
       this.lastSvg = svg;
-      this.canvas.innerHTML = svg;
+      this.lastType = type;
+      this.showDiagram();
       this.status.textContent = `${type} · 렌더 ${Math.round(performance.now() - startedAt)}ms`;
     } catch (error) {
       if (token !== this.renderToken) return;
@@ -142,7 +191,69 @@ export class App {
     }
   }
 
+  /** 마지막으로 렌더링한 SVG를 캔버스에 놓고, 저장된 노드 위치·크기를 오버레이로 적용한다. */
+  private showDiagram(): void {
+    this.overlay.detach();
+    if (!this.lastSvg) return;
+    this.canvas.innerHTML = this.lastSvg;
+    this.hint.textContent = this.lastType ? HINTS[this.lastType] : '';
+    const svg = this.canvas.querySelector('svg');
+    if (svg && this.lastType === 'class') {
+      const { nodeLayouts, edgePaths } = this.model.getState();
+      this.overlay.attach(svg, nodeLayouts, edgePaths);
+    }
+  }
+
+  private preview(apply: () => void): void {
+    this.previewing = true;
+    try {
+      apply();
+    } finally {
+      this.previewing = false;
+    }
+  }
+
+  private commitOverlayEdit(command: Command): void {
+    this.flushPendingInput();
+    this.history.execute(command);
+    this.updateButtons();
+    // 미리보기로 모델이 이미 같은 값이면 알림이 오지 않으므로, 여기서 한 번 다시 그린다 (보이는 영역 맞추기 포함).
+    this.showDiagram();
+  }
+
+  /**
+   * 성능·정확도 측정 (SRS 3.3, REQ-04 확인 기준): 노드 30개 다이어그램에서 노드를 무작위로 20번 끌며
+   * 프레임 속도와 엣지 끝점 오차를 잰다. 측정으로 옮긴 위치는 모델에 기록하지 않고 끝나면 원래대로 돌린다.
+   */
+  private async runBenchmark(): Promise<void> {
+    this.flushPendingInput();
+    const code = makeBenchmarkCode(30);
+    if (this.model.getState().code !== code) {
+      this.history.execute(new SetCodeCommand(this.model, this.committedCode, code));
+      this.updateButtons();
+    }
+    this.status.textContent = '측정 준비 중…';
+    const ready = await waitFor(() => this.lastType === 'class' && this.overlay.nodeIds().length >= 30);
+    if (!ready) {
+      this.status.textContent = '측정 실패: 다이어그램이 그려지지 않았습니다';
+      return;
+    }
+    this.status.textContent = '측정 중… (끝날 때까지 이 탭을 보고 있어 주세요)';
+    const result = await runOverlayBenchmark(this.overlay);
+    this.showDiagram(); // 측정하느라 옮긴 노드를 원래 자리로
+    console.table(result);
+    (window as unknown as { unidiaBenchmark?: unknown }).unidiaBenchmark = result;
+    const verdict = result.passFps && result.passEndpoint ? '기준 통과' : '기준 미달';
+    this.status.textContent =
+      `노드 ${result.nodes}개 · 평균 ${result.avgFps}fps (최저 ${result.minFps}) · ` +
+      `끝점 오차 최대 ${result.maxEndpointErrorPx}px · ${verdict}` +
+      (result.pageVisible ? '' : ' (탭이 가려져 fps 무효)');
+  }
+
   private showError(message: string): void {
+    this.overlay.detach();
+    this.lastSvg = '';
+    this.hint.textContent = '';
     this.canvas.innerHTML = '';
     const el = document.createElement('div');
     el.className = 'error';
