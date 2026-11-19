@@ -12,6 +12,7 @@ import {
   parseTranslate,
   pointAtHalfLength,
   polylinePath,
+  trimRoute,
   rectBorderPoint,
   resizeFromBottomRight,
   routeWithWaypoints,
@@ -149,6 +150,24 @@ describe('SVG에서 노드·엣지 식별', () => {
     expect(distanceToRectBorder({ x: 50, y: 0 }, rect)).toBe(0); // 테두리 위
     expect(distanceToRectBorder({ x: 50, y: 10 }, rect)).toBe(10); // 안쪽 10px
     expect(distanceToRectBorder({ x: 50, y: -3 }, rect)).toBe(3); // 바깥 3px
+  });
+});
+
+describe('화살촉 자리 띄우기', () => {
+  it('시작·끝을 화살촉 길이만큼 안쪽으로 줄인다', () => {
+    const route = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
+    expect(trimRoute(route, 17.25, 0)).toEqual([{ x: 17.25, y: 0 }, { x: 100, y: 0 }]);
+    expect(trimRoute(route, 0, 6)).toEqual([{ x: 0, y: 0 }, { x: 94, y: 0 }]);
+  });
+
+  it('꺾임점이 있으면 첫·마지막 구간 방향으로 줄이고 꺾임점은 그대로 둔다', () => {
+    const route = [{ x: 0, y: 0 }, { x: 0, y: 100 }, { x: 100, y: 100 }];
+    expect(trimRoute(route, 10, 10)).toEqual([{ x: 0, y: 10 }, { x: 0, y: 100 }, { x: 90, y: 100 }]);
+  });
+
+  it('구간이 짧아도 양 끝이 서로 지나치지 않는다', () => {
+    const [start, end] = trimRoute([{ x: 0, y: 0 }, { x: 20, y: 0 }], 17.25, 17.25);
+    expect(start.x).toBeLessThan(end.x);
   });
 });
 

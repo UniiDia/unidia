@@ -12,6 +12,7 @@ import {
   parseTranslate,
   pointAtHalfLength,
   polylinePath,
+  trimRoute,
   resizeFromBottomRight,
   routeWithWaypoints,
   waypointInsertIndex,
@@ -27,6 +28,8 @@ const FIT_PADDING = 16;
 const DRAG_THRESHOLD = 2;
 /* 연결선 끝점이 노드에서 이 거리 안에 있어야 그 노드에 연결된 것으로 본다 */
 const EDGE_SNAP_DISTANCE = 30;
+/* 화살촉 자리로 볼 수 있는 최대 거리 (Mermaid 화살촉은 20px 이내) */
+const MAX_ARROW_GAP = 30;
 const ACCENT = '#1a73e8';
 
 interface TextGroup {
@@ -66,6 +69,9 @@ interface EdgeInfo {
   key: string | null;
   start: Point;
   end: Point;
+  /* Mermaid가 화살촉 자리로 비워 둔 거리 (선 시작·끝이 노드 테두리에서 떨어진 만큼, 화살촉이 없으면 0) */
+  startTrim: number;
+  endTrim: number;
   /* 사용자가 넣은 꺾임점 (REQ-05) */
   waypoints: Point[];
   /* 클릭 판정용 투명한 굵은 선 */
@@ -245,24 +251,37 @@ export class ClassDiagramOverlay implements OverlayLayer {
 
   private collectEdges(root: SVGGElement): void {
     const nodeRects = [...this.nodes.values()].map((node) => ({ id: node.id, rect: layoutRect(node.base) }));
-    const found: { el: SVGPathElement; id: string; start: Point; end: Point; from: string | null; to: string | null }[] = [];
+    const found: {
+      el: SVGPathElement;
+      id: string;
+      start: Point;
+      end: Point;
+      startTrim: number;
+      endTrim: number;
+      from: string | null;
+      to: string | null;
+    }[] = [];
     for (const el of root.querySelectorAll<SVGPathElement>('g.edgePaths path[data-id]')) {
       const points = decodeEdgePoints(el.dataset.points);
       if (points.length < 2) continue;
       const start = points[0];
       const end = points[points.length - 1];
+      /* data-points의 끝점은 노드 테두리, 실제로 그려진 선은 화살촉 길이만큼 짧다. 그 차이를 재 둔다. */
+      const length = el.getTotalLength();
       found.push({
         el,
         id: el.dataset.id!,
         start,
         end,
+        startTrim: arrowGap(el.getPointAtLength(0), start),
+        endTrim: arrowGap(el.getPointAtLength(length), end),
         from: findAttachedNode(start, nodeRects, EDGE_SNAP_DISTANCE),
         to: findAttachedNode(end, nodeRects, EDGE_SNAP_DISTANCE),
       });
     }
 
     const keys = assignEdgeKeys(found);
-    found.forEach(({ el, id, start, end, from, to }, index) => {
+    found.forEach(({ el, id, start, end, startTrim, endTrim, from, to }, index) => {
       const key = keys[index];
       const labelInner = root.querySelector(`g.edgeLabels g.label[data-id="${CSS.escape(id)}"]`);
       const label =
@@ -270,7 +289,20 @@ export class ClassDiagramOverlay implements OverlayLayer {
         labelInner.parentElement.classList.contains('edgeLabel')
           ? labelInner.parentElement
           : null;
-      this.edges.push({ el, from, to, key, start, end, waypoints: [], hit: null, label, terminals: [] });
+      this.edges.push({
+        el,
+        from,
+        to,
+        key,
+        start,
+        end,
+        startTrim,
+        endTrim,
+        waypoints: [],
+        hit: null,
+        label,
+        terminals: [],
+      });
     });
 
     // 다중성 표기는 어느 선의 것인지 표시가 없어서, 가장 가까운 선 끝점에 붙인다.
@@ -405,7 +437,8 @@ export class ClassDiagramOverlay implements OverlayLayer {
     if (!from.custom && !to.custom && edge.waypoints.length === 0) return;
 
     const route = this.currentRoute(edge)!;
-    const d = polylinePath(route);
+    /* 화살촉이 노드에 가려지지 않도록 Mermaid처럼 화살촉 자리만큼 띄워서 그린다 */
+    const d = polylinePath(trimRoute(route, edge.startTrim, edge.endTrim));
     edge.el.setAttribute('d', d);
     edge.hit?.setAttribute('d', d);
 
@@ -738,8 +771,8 @@ export class ClassDiagramOverlay implements OverlayLayer {
   }
 
   /*
-   * 그 노드에 연결된 선들의 끝점이 연결된 노드 테두리에서 얼마나 떨어져 있는지(다이어그램 px).
-   * 계산값이 아니라 화면에 실제로 그려진 선(path)의 시작·끝점을 읽어서 잰다.
+   * 그 노드에 연결된 선들의 끝(화살촉 끝)이 연결된 노드 테두리에서 얼마나 떨어져 있는지(다이어그램 px).
+   * 계산값이 아니라 화면에 실제로 그려진 선(path)의 시작·끝점을 읽고, 화살촉 자리만큼 바깥으로 연장해서 잰다.
    */
   endpointErrors(id: string): number[] {
     const errors: number[] = [];
@@ -749,10 +782,10 @@ export class ClassDiagramOverlay implements OverlayLayer {
       const to = edge.to ? this.nodes.get(edge.to) : undefined;
       if (!from || !to || from === to) continue;
       const length = edge.el.getTotalLength();
-      const start = edge.el.getPointAtLength(0);
-      const end = edge.el.getPointAtLength(length);
-      errors.push(distanceToRectBorder({ x: start.x, y: start.y }, layoutRect(from.current)));
-      errors.push(distanceToRectBorder({ x: end.x, y: end.y }, layoutRect(to.current)));
+      const start = arrowTip(edge.el, 0, Math.min(1, length), edge.startTrim);
+      const end = arrowTip(edge.el, length, Math.max(0, length - 1), edge.endTrim);
+      errors.push(distanceToRectBorder(start, layoutRect(from.current)));
+      errors.push(distanceToRectBorder(end, layoutRect(to.current)));
     }
     return errors;
   }
@@ -764,6 +797,21 @@ export class ClassDiagramOverlay implements OverlayLayer {
     const point = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
     return { x: point.x, y: point.y };
   }
+}
+
+/* 그려진 선 끝과 노드 테두리 사이 거리 = 화살촉 자리 (이상하게 크면 화살촉이 아닌 것으로 보고 무시) */
+function arrowGap(drawn: DOMPoint, border: Point): number {
+  const gap = Math.hypot(drawn.x - border.x, drawn.y - border.y);
+  return gap <= MAX_ARROW_GAP ? gap : 0;
+}
+
+/* 그려진 선의 끝(at)에서 선 바깥쪽으로 gap만큼 연장한 점 = 화살촉 끝 (inward는 선 안쪽의 가까운 지점) */
+function arrowTip(path: SVGPathElement, at: number, inward: number, gap: number): Point {
+  const end = path.getPointAtLength(at);
+  const inner = path.getPointAtLength(inward);
+  const length = Math.hypot(end.x - inner.x, end.y - inner.y);
+  if (length === 0 || gap === 0) return { x: end.x, y: end.y };
+  return { x: end.x + ((end.x - inner.x) / length) * gap, y: end.y + ((end.y - inner.y) / length) * gap };
 }
 
 function copyPoints(points: readonly Point[]): Point[] {

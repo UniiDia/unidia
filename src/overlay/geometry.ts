@@ -143,6 +143,28 @@ export function contentShift(
 }
 
 /*
+ * 화살촉 자리만큼 선의 양 끝을 줄인다.
+ * Mermaid는 화살촉 길이만큼 선을 노드에서 띄워 그리고, 그 빈자리에 화살촉을 그려 끝이 노드 테두리에 닿게 한다.
+ * 줄이지 않으면 화살촉이 노드 안쪽으로 들어가 노드에 가려진다.
+ */
+export function trimRoute(route: readonly Point[], startTrim: number, endTrim: number): Point[] {
+  const points = route.map((p) => ({ x: p.x, y: p.y }));
+  const n = points.length;
+  if (n < 2) return points;
+  points[0] = moveToward(route[0], route[1], startTrim);
+  points[n - 1] = moveToward(route[n - 1], route[n - 2], endTrim);
+  return points;
+}
+
+/* from에서 to 쪽으로 distance만큼 옮긴 점 (구간 길이의 45%를 넘지 않게: 양 끝을 줄여도 서로 지나치지 않도록) */
+function moveToward(from: Point, to: Point, distance: number): Point {
+  const length = Math.hypot(to.x - from.x, to.y - from.y);
+  if (length === 0 || distance <= 0) return { x: from.x, y: from.y };
+  const t = Math.min(distance, length * 0.45) / length;
+  return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+}
+
+/*
  * 꺾임점이 있는 연결선의 전체 경유점 (REQ-05).
  * 양 끝점은 각 노드 테두리 위에 두고(REQ-04), 첫·마지막 꺾임점 쪽을 향하게 한다.
  */
