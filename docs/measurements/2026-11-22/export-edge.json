@@ -1,0 +1,50 @@
+[
+  {
+    "zoom": 0.25,
+    "id": "png",
+    "mime": "image/png",
+    "width": 2000,
+    "height": 2498,
+    "ink": 79666
+  },
+  {
+    "zoom": 0.25,
+    "id": "jpg",
+    "mime": "image/jpeg",
+    "width": 2000,
+    "height": 2498,
+    "ink": 80867
+  },
+  {
+    "zoom": 1,
+    "id": "png",
+    "mime": "image/png",
+    "width": 2000,
+    "height": 2498,
+    "ink": 79666
+  },
+  {
+    "zoom": 1,
+    "id": "jpg",
+    "mime": "image/jpeg",
+    "width": 2000,
+    "height": 2498,
+    "ink": 80867
+  },
+  {
+    "zoom": 4,
+    "id": "png",
+    "mime": "image/png",
+    "width": 2000,
+    "height": 2498,
+    "ink": 79666
+  },
+  {
+    "zoom": 4,
+    "id": "jpg",
+    "mime": "image/jpeg",
+    "width": 2000,
+    "height": 2498,
+    "ink": 80867
+  }
+]

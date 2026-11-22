@@ -118,14 +118,19 @@ export class App {
     this.textarea.value = this.model.getState().code;
 
     // 모델 변경 → 에디터 반영 + 렌더링 (Observer)
+    let observedState = this.model.getState();
     this.model.subscribe((state) => {
+      const visualsChanged = state.nodeLayouts !== observedState.nodeLayouts ||
+        state.edgePaths !== observedState.edgePaths;
+      observedState = state;
       if (this.previewing) return;
       if (this.textarea.value !== state.code) this.textarea.value = state.code;
       this.committedCode = state.code;
       if (state.code !== this.requestedCode) {
         this.scheduleRender();
-      } else if (state.code === this.renderedCode) {
+      } else if (visualsChanged && state.code === this.renderedCode) {
         // 위치·크기만 바뀐 경우: Mermaid를 다시 돌리지 않고 오버레이만 다시 적용한다.
+        // 코드 이력의 400ms 지연 기록은 진행 중인 드래그의 SVG를 교체하지 않는다.
         this.showDiagram();
       }
       this.updateButtons();
@@ -135,10 +140,12 @@ export class App {
     this.undoButton.addEventListener('click', () => {
       this.flushPendingInput();
       this.history.undo();
+      this.updateButtons();
     });
     this.redoButton.addEventListener('click', () => {
       this.flushPendingInput();
       this.history.redo();
+      this.updateButtons();
     });
     this.root
       .querySelector('[data-action="export-mermaid"]')!
@@ -177,10 +184,12 @@ export class App {
       e.preventDefault();
       this.flushPendingInput();
       this.history.undo();
+      this.updateButtons();
     } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
       e.preventDefault();
       this.flushPendingInput();
       this.history.redo();
+      this.updateButtons();
     }
   }
 
@@ -192,6 +201,7 @@ export class App {
     const prev = this.committedCode;
     this.committedCode = next;
     this.history.execute(new SetCodeCommand(this.model, prev, next));
+    this.updateButtons();
   }
 
   private scheduleRender(code?: string, immediate = false): void {
