@@ -3,16 +3,30 @@ export type DiagramType = 'class' | 'sequence';
 
 /**
  * Mermaid 코드의 첫 유효 줄로 다이어그램 유형을 판별한다.
- * 주석(%%)과 빈 줄은 건너뛴다. 지원하지 않는 유형이면 null.
- * 참고: frontmatter(---) 블록은 아직 처리하지 않는다.
+ * YAML frontmatter, 주석, 여러 줄 init 지시문은 건너뛴다.
+ * 문법 검증은 RenderEngine 안의 Mermaid가 담당한다.
  */
 export function detectDiagramType(code: string): DiagramType | null {
-  const first = code
-    .split('\n')
-    .map((line) => line.trim())
-    .find((line) => line !== '' && !line.startsWith('%%'));
-  if (!first) return null;
-  if (first.startsWith('classDiagram')) return 'class';
-  if (first.startsWith('sequenceDiagram')) return 'sequence';
+  let source = code.replace(/\r\n?/g, '\n').trimStart();
+  if (/^---\s*\n/.test(source)) {
+    const closing = /^---\s*$/m.exec(source.slice(source.indexOf('\n') + 1));
+    if (!closing) return null;
+    source = source.slice(source.indexOf('\n') + 1 + closing.index + closing[0].length);
+  }
+
+  while ((source = source.trimStart()).startsWith('%%')) {
+    if (source.startsWith('%%{')) {
+      const end = source.indexOf('}%%');
+      if (end < 0) return null;
+      source = source.slice(end + 3);
+    } else {
+      const end = source.indexOf('\n');
+      if (end < 0) return null;
+      source = source.slice(end + 1);
+    }
+  }
+
+  if (/^classDiagram(?:-v2)?(?=\s|;|$)/.test(source)) return 'class';
+  if (/^sequenceDiagram(?=\s|;|$)/.test(source)) return 'sequence';
   return null;
 }

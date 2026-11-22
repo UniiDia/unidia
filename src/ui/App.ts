@@ -9,8 +9,11 @@ import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
 import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
 import { makeBenchmarkCode, runOverlayBenchmark, waitFor } from '../overlay/benchmark';
-import { RenderEngine } from '../render/RenderEngine';
-import { type DiagramType, detectDiagramType } from '../render/diagramTypes';
+import type { DiagramType } from '../render/diagramTypes';
+import { RenderEngine, type RenderResult } from '../render/RenderEngine';
+import { RenderScheduler } from '../render/RenderScheduler';
+import { SvgViewport } from '../render/SvgViewport';
+import { serializeDiagram } from '../render/serializeDiagram';
 
 const SAMPLE_CODE = `classDiagram
   class Animal {
@@ -55,6 +58,11 @@ export class App {
   });
   /** 드래그 미리보기 중에는 오버레이가 이미 화면을 그렸으므로 다시 그리지 않는다. */
   private previewing = false;
+  private viewport = new SvgViewport();
+  private scheduler = new RenderScheduler(this.engine, {
+    onSuccess: (result, startedAt) => this.showRender(result, startedAt),
+    onError: (error) => this.showError(error instanceof Error ? error.message : String(error)),
+  }, RENDER_DEBOUNCE_MS);
 
   private textarea!: HTMLTextAreaElement;
   private canvas!: HTMLDivElement;
@@ -67,7 +75,8 @@ export class App {
   private lastSvg = '';
   private lastType: DiagramType | null = null;
   private renderToken = 0;
-  private renderTimer: number | undefined;
+  private requestedCode: string | undefined;
+  private renderedCode: string | undefined;
   private historyTimer: number | undefined;
 
   constructor(private root: HTMLElement) {}
@@ -80,11 +89,23 @@ export class App {
         <button data-action="export-mermaid">Mermaid 코드 내보내기</button>
         ${BENCHMARK_MODE ? '<button data-action="benchmark">성능 측정 (노드 30개)</button>' : ''}
         <span class="hint"></span>
-        <span class="status"></span>
+        <label>배율
+          <select aria-label="다이어그램 배율">
+            <option value="0.25">25%</option>
+            <option value="0.5">50%</option>
+            <option value="0.75">75%</option>
+            <option value="1" selected>100%</option>
+            <option value="1.5">150%</option>
+            <option value="2">200%</option>
+            <option value="3">300%</option>
+            <option value="4">400%</option>
+          </select>
+        </label>
+        <span class="status" role="status"></span>
       </div>
       <div class="panes">
-        <div class="code-pane"><textarea spellcheck="false"></textarea></div>
-        <div class="canvas-pane"></div>
+        <div class="code-pane"><textarea aria-label="Mermaid 코드" spellcheck="false"></textarea></div>
+        <div class="canvas-pane" aria-label="다이어그램 미리보기"></div>
       </div>`;
 
     this.textarea = this.root.querySelector('textarea')!;
@@ -97,15 +118,13 @@ export class App {
     this.textarea.value = this.model.getState().code;
 
     // 모델 변경 → 에디터 반영 + 렌더링 (Observer)
-    let renderedCode = this.model.getState().code;
     this.model.subscribe((state) => {
       if (this.previewing) return;
       if (this.textarea.value !== state.code) this.textarea.value = state.code;
       this.committedCode = state.code;
-      if (state.code !== renderedCode) {
-        renderedCode = state.code;
+      if (state.code !== this.requestedCode) {
         this.scheduleRender();
-      } else {
+      } else if (state.code === this.renderedCode) {
         // 위치·크기만 바뀐 경우: Mermaid를 다시 돌리지 않고 오버레이만 다시 적용한다.
         this.showDiagram();
       }
@@ -113,23 +132,33 @@ export class App {
     });
 
     this.textarea.addEventListener('input', () => this.onCodeInput());
-    this.undoButton.addEventListener('click', () => this.history.undo());
-    this.redoButton.addEventListener('click', () => this.history.redo());
+    this.undoButton.addEventListener('click', () => {
+      this.flushPendingInput();
+      this.history.undo();
+    });
+    this.redoButton.addEventListener('click', () => {
+      this.flushPendingInput();
+      this.history.redo();
+    });
     this.root
       .querySelector('[data-action="export-mermaid"]')!
       .addEventListener('click', () => void this.exportAs('mermaid'));
+    this.root.querySelector('select')!.addEventListener('change', (event) => {
+      this.viewport.setZoom(Number((event.target as HTMLSelectElement).value));
+    });
     document.addEventListener('keydown', (e) => this.onKeyDown(e));
     this.root
       .querySelector('[data-action="benchmark"]')
       ?.addEventListener('click', () => void this.runBenchmark());
 
     this.updateButtons();
-    void this.renderNow();
+    this.scheduleRender(undefined, true);
   }
 
   private onCodeInput(): void {
     // 입력 중에는 미리보기만 갱신하고, 잠시 멈추면 한 번의 편집(Command)으로 기록한다.
     this.scheduleRender(this.textarea.value);
+    this.updateButtons();
     window.clearTimeout(this.historyTimer);
     this.historyTimer = window.setTimeout(() => {
       const next = this.textarea.value;
@@ -150,6 +179,7 @@ export class App {
       this.history.undo();
     } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
       e.preventDefault();
+      this.flushPendingInput();
       this.history.redo();
     }
   }
@@ -164,36 +194,42 @@ export class App {
     this.history.execute(new SetCodeCommand(this.model, prev, next));
   }
 
-  private scheduleRender(code?: string): void {
-    window.clearTimeout(this.renderTimer);
-    this.renderTimer = window.setTimeout(() => void this.renderNow(code), RENDER_DEBOUNCE_MS);
+  private scheduleRender(code?: string, immediate = false): void {
+    const source = code ?? this.model.getState().code;
+    // Command 기록 시 같은 코드가 다시 통지되어도 중복 렌더하지 않는다.
+    if (source === this.requestedCode) return;
+    this.requestedCode = source;
+    ++this.renderToken;
+    // 새 코드가 준비될 때까지 이전 노드에 대한 편집을 받지 않는다.
+    this.overlay.detach();
+    this.canvas.setAttribute('aria-busy', 'true');
+    this.status.dataset.state = 'pending';
+    delete this.status.dataset.renderMs;
+    this.status.textContent = '렌더링 중…';
+    this.scheduler.request(source, immediate);
   }
 
-  private async renderNow(code?: string): Promise<void> {
-    const source = code ?? this.model.getState().code;
-    const token = ++this.renderToken;
-    const type = detectDiagramType(source);
-    if (type === null) {
-      this.showError('지원하지 않는 다이어그램입니다. classDiagram 또는 sequenceDiagram으로 시작해 주세요.');
-      return;
-    }
-    const startedAt = performance.now();
-    try {
-      const { svg } = await this.engine.render(source);
-      if (token !== this.renderToken) return; // 더 최신 렌더 요청이 있으면 버린다
-      this.lastSvg = svg;
-      this.lastType = type;
-      this.showDiagram();
-      this.status.textContent = `${type} · 렌더 ${Math.round(performance.now() - startedAt)}ms`;
-    } catch (error) {
+  private showRender({ svg, type }: RenderResult, startedAt: number): void {
+    this.lastSvg = svg;
+    this.lastType = type;
+    this.renderedCode = this.requestedCode;
+    this.showDiagram();
+    const token = this.renderToken;
+    // 마지막 입력부터 debounce·렌더·화면 반영까지 포함한다 (REQ-01).
+    requestAnimationFrame(() => requestAnimationFrame(() => {
       if (token !== this.renderToken) return;
-      this.showError(error instanceof Error ? error.message : String(error));
-    }
+      const elapsed = performance.now() - startedAt;
+      this.canvas.setAttribute('aria-busy', 'false');
+      this.status.dataset.state = 'success';
+      this.status.dataset.renderMs = String(elapsed);
+      this.status.textContent = `${type === 'class' ? '클래스' : '시퀀스'} · 반영 ${Math.round(elapsed)}ms`;
+    }));
   }
 
   /** 마지막으로 렌더링한 SVG를 캔버스에 놓고, 저장된 노드 위치·크기를 오버레이로 적용한다. */
   private showDiagram(): void {
     this.overlay.detach();
+    this.viewport.detach();
     if (!this.lastSvg) return;
     this.canvas.innerHTML = this.lastSvg;
     this.hint.textContent = this.lastType ? HINTS[this.lastType] : '';
@@ -202,6 +238,8 @@ export class App {
       const { nodeLayouts, edgePaths } = this.model.getState();
       this.overlay.attach(svg, nodeLayouts, edgePaths);
     }
+    // 오버레이가 viewBox를 맞춘 다음 배율을 적용해야 이동·리사이즈 후에도 배율이 유지된다.
+    if (svg) this.viewport.attach(svg);
   }
 
   private preview(apply: () => void): void {
@@ -218,7 +256,7 @@ export class App {
     this.history.execute(command);
     this.updateButtons();
     // 미리보기로 모델이 이미 같은 값이면 알림이 오지 않으므로, 여기서 한 번 다시 그린다 (보이는 영역 맞추기 포함).
-    this.showDiagram();
+    if (this.renderedCode === this.requestedCode) this.showDiagram();
   }
 
   /**
@@ -233,7 +271,8 @@ export class App {
       this.updateButtons();
     }
     this.status.textContent = '측정 준비 중…';
-    const ready = await waitFor(() => this.lastType === 'class' && this.overlay.nodeIds().length >= 30);
+    const ready = await waitFor(() => this.renderedCode === code &&
+      this.status.dataset.state === 'success' && this.overlay.nodeIds().length >= 30);
     if (!ready) {
       this.status.textContent = '측정 실패: 다이어그램이 그려지지 않았습니다';
       return;
@@ -252,26 +291,41 @@ export class App {
 
   private showError(message: string): void {
     this.overlay.detach();
+    this.viewport.detach();
     this.lastSvg = '';
+    this.lastType = null;
+    this.renderedCode = undefined;
     this.hint.textContent = '';
     this.canvas.innerHTML = '';
     const el = document.createElement('div');
     el.className = 'error';
+    el.setAttribute('role', 'alert');
     el.textContent = message;
     this.canvas.appendChild(el);
     this.status.textContent = '오류';
+    this.status.dataset.state = 'error';
+    this.canvas.setAttribute('aria-busy', 'false');
   }
 
   private updateButtons(): void {
-    this.undoButton.disabled = !this.history.canUndo;
-    this.redoButton.disabled = !this.history.canRedo;
+    const pendingInput = this.textarea.value !== this.committedCode;
+    this.undoButton.disabled = !pendingInput && !this.history.canUndo;
+    this.redoButton.disabled = pendingInput || !this.history.canRedo;
   }
 
   private async exportAs(id: 'png' | 'jpg' | 'mermaid'): Promise<void> {
     const strategy = exportStrategies.find((s) => s.id === id);
     if (!strategy) return;
     try {
-      const blob = await strategy.export({ svg: this.lastSvg, code: this.model.getState().code });
+      this.flushPendingInput();
+      const svg = this.canvas.querySelector('svg');
+      if (id !== 'mermaid' && (!svg || this.status.dataset.state !== 'success')) {
+        throw new Error('다이어그램 렌더링이 완료된 뒤 내보내 주세요.');
+      }
+      const blob = await strategy.export({
+        svg: svg ? serializeDiagram(svg) : '',
+        code: this.model.getState().code,
+      });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

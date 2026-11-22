@@ -1,0 +1,69 @@
+{
+  "type": "class",
+  "measurements": [
+    {
+      "zoom": 0.25,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 4,
+      "sampleShapeHeight": 30.75
+    },
+    {
+      "zoom": 0.5,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 8,
+      "sampleShapeHeight": 61.5
+    },
+    {
+      "zoom": 0.75,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 12,
+      "sampleShapeHeight": 92.25
+    },
+    {
+      "zoom": 1,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 16,
+      "sampleShapeHeight": 123
+    },
+    {
+      "zoom": 1.5,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 24,
+      "sampleShapeHeight": 184.5
+    },
+    {
+      "zoom": 2,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 32,
+      "sampleShapeHeight": 246
+    },
+    {
+      "zoom": 3,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 48,
+      "sampleShapeHeight": 369
+    },
+    {
+      "zoom": 4,
+      "labels": 90,
+      "maxRatioChangePercent": 0,
+      "maxOverflowPx": 0,
+      "sampleFontPixels": 64,
+      "sampleShapeHeight": 492
+    }
+  ]
+}

@@ -22,9 +22,17 @@ npm run build    # 타입 검사 + 프로덕션 빌드
 - JSON 저장·불러오기 로직 (REQ-12, UI 연결 전 — `DiagramModel.toJSON / load / fromJSON`). 불러오기는 파일 버전과 노드·엣지 형식을 검사하며, `load()`는 구독을 유지한 채 상태를 바꾼다
 - Mermaid 코드(.mmd) 내보내기 (REQ-08 일부)
 - 화면 상단에 렌더링 시간 표시 (성능 기준 실측용)
+- 25%~400% SVG 확대·축소, 도형과 폰트를 같은 비율로 표시 (REQ-06, 전체 다이어그램 배율)
+- 최신 입력만 표시하는 렌더링 스케줄러와 오류 후 복구 (REQ-01)
+- 유형 판별 시 YAML frontmatter·여러 줄 지시문·주석 처리, 잘못된 유형 접두어 거절 (REQ-07)
 
 아직 없는 것: GUI 드래그 편집(REQ-02), 코드↔GUI 동기화(REQ-03), 마그네틱 커넥터(REQ-04),
-엣지 경로 조정(REQ-05), 폰트 스케일링(REQ-06), PNG/JPG 내보내기(REQ-08), 흑백 4색 테마(REQ-09).
+엣지 경로 조정(REQ-05), 개별 노드 리사이즈와 연결되는 폰트 조정, PNG/JPG 내보내기(REQ-08), 흑백 4색 테마(REQ-09).
+
+렌더링 담당의 주간 실측 결과는 [2026-11-18 렌더링 시험 기록](rendering-weekly-2026-11-18.md)에 있다.
+REQ-01의 1초 성능 목표는 기능 동작 여부와 별개로 판정한다. 클래스 30개 성능은 현재 개선이 필요하다.
+상단의 `반영 …ms`는 마지막 입력부터 150ms 대기, Mermaid 렌더, 화면 반영 프레임까지 포함한다.
+이전 뼈대의 `렌더 …ms`는 Mermaid 호출 시간만 측정하므로 두 값을 그대로 비교하면 안 된다.
 
 ## 폴더 구조 (아키텍처의 4계층)
 
@@ -59,3 +67,23 @@ src/
 
 Vite + TypeScript + Mermaid 11 + Vitest는 뼈대를 만들 때의 기본값이며 팀에서 확정한 것이 아니다.
 프레임워크(React 등) 도입 여부는 UI 설계 단계에서 정한다.
+
+## 렌더링 검증
+
+```bash
+npm test
+npm run typecheck
+npm run build
+npx playwright install chromium  # 처음 한 번, 테스트용 브라우저가 없을 때
+npm run test:browser             # 기능·폰트 스케일링 검증
+npm run test:performance         # 30개 노드, 유형별 20회 실측 및 1초 기준 판정
+```
+
+SRS의 Chrome 기준으로 설치된 Chrome을 사용하려면 PowerShell에서
+`$env:PLAYWRIGHT_CHANNEL = 'chrome'`을 설정한 뒤 실행한다. Edge는 `msedge`를 사용한다.
+성능 검증은 다른 빌드나 테스트와 동시에 실행하지 않는다. 임계값 미달이면 명령은 실패하며,
+그 경우에도 `test-results/`에 JSON 원시 측정값과 캡처를 남긴다. 두 검증을 함께 실행하려면
+`npx playwright test`를 사용한다.
+
+[연동 API와 범위](rendering.md), [30개 클래스 예제](../examples/render/class-30.mmd),
+[30개 참여자 시퀀스 예제](../examples/render/sequence-30.mmd)를 참고한다.
