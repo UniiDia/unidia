@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { messageLineIndexes, moveMessage } from './sequenceCode';
+import { messageLineIndexes, moveMessage, reconnectMessage } from './sequenceCode';
 
 const CODE = `sequenceDiagram
   participant Alice
@@ -54,5 +54,28 @@ describe('시퀀스 메시지 순서 바꾸기', () => {
     expect(moveMessage(CODE, 1, 1)).toBeNull();
     expect(moveMessage(CODE, 0, 5)).toBeNull();
     expect(moveMessage(CODE, -1, 0)).toBeNull();
+  });
+});
+
+describe('시퀀스 메시지 보낸이·받는이 바꾸기', () => {
+  const code = 'sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>+Alice: Hi\n  Bob->>Bob: Think\n';
+
+  it('보낸이(start)나 받는이(end)를 바꾼다 — Alice->>Bob 을 Bob->>Carol 로', () => {
+    const step1 = reconnectMessage(code, 0, 'start', 'Bob')!;
+    expect(step1).toContain('  Bob->>Bob: Hello\n');
+    expect(reconnectMessage(step1, 0, 'end', 'Carol')).toContain('  Bob->>Carol: Hello\n');
+  });
+
+  it('화살표 모양과 활성화 표시(+), 내용은 그대로 둔다', () => {
+    expect(reconnectMessage(code, 1, 'end', 'Carol')).toContain('  Bob-->>+Carol: Hi\n');
+  });
+
+  it('자기 자신에게 보내는 메시지도 바꿀 수 있다', () => {
+    expect(reconnectMessage(code, 2, 'end', 'Alice')).toContain('  Bob->>Alice: Think\n');
+  });
+
+  it('번호가 범위를 벗어나거나 바뀌는 게 없으면 null', () => {
+    expect(reconnectMessage(code, 5, 'end', 'Carol')).toBeNull();
+    expect(reconnectMessage(code, 0, 'end', 'Bob')).toBeNull();
   });
 });

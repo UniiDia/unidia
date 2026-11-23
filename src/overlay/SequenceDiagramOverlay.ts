@@ -24,6 +24,9 @@ const DRAG_THRESHOLD = 2;
 /* 순서를 바꿀 때 놓일 자리 표시선 */
 const REORDER_COLOR = '#1e8e3e';
 const INDICATOR_OVERHANG = 60;
+const ENDPOINT_SIZE = 8;
+/* 메시지 끝을 놓을 때, 생명선에서 이 거리 안이면 그 참여자로 본다 */
+const LIFELINE_PICK_DISTANCE = 90;
 
 /*
  * 모델에 저장할 때 붙이는 접두어. 클래스 다이어그램의 노드 이름과 섞이지 않게 한다.
@@ -65,6 +68,8 @@ interface Message {
   x2: number;
   /* 원래 세로 위치 (직선은 y, 곡선은 위쪽 끝) */
   y: number;
+  /* 자기 자신에게 보내는 곡선의 높이 (직선은 0) */
+  height: number;
   original: string | null;
   /* 사용자가 위아래로 옮긴 양 */
   dy: number;
@@ -79,6 +84,8 @@ export interface SequenceDiagramOverlayOptions extends OverlayCallbacks {
    * from·to는 메시지끼리 센 순서(0부터). 코드의 메시지 줄을 옮기는 일은 호출한 쪽에서 한다.
    */
   onMessageReorder(from: number, to: number, key: string | null): void;
+  /* 메시지 끝 ■ 핸들을 다른 참여자에 놓았을 때 (보낸이=start, 받는이=end 변경). 코드 수정은 호출한 쪽에서 한다. */
+  onMessageReconnect(index: number, end: 'start' | 'end', participant: string, key: string | null): void;
 }
 
 /*
@@ -88,6 +95,7 @@ export interface SequenceDiagramOverlayOptions extends OverlayCallbacks {
  *   연결된 메시지 화살표는 양 끝이 생명선에 붙은 채 늘어나거나 줄어든다 (REQ-04). 노트·활성 상자도 따라간다.
  * - 메시지 간격 조정: 메시지 화살표를 위아래로 끈다. 바로 위·아래 메시지 사이에 놓으면 간격만 바뀐다.
  * - 메시지 순서 변경: 다른 메시지를 넘어가면 놓일 자리에 표시선이 보이고, 놓으면 코드의 메시지 줄 순서가 바뀐다.
+ * - 보낸이·받는이 변경: 메시지를 선택하면 양 끝에 ■ 핸들이 생기고, 다른 참여자 생명선에 놓으면 코드가 바뀐다.
  * 결과는 클래스 다이어그램과 같은 방식으로 콜백에 넘긴다 (미리보기 → { prev }로 한 번 기록).
  */
 export class SequenceDiagramOverlay implements OverlayLayer {
@@ -99,6 +107,10 @@ export class SequenceDiagramOverlay implements OverlayLayer {
   private selectionBox: SVGRectElement | null = null;
   /* 메시지 순서를 바꿀 때 놓일 자리를 보여주는 선 */
   private indicator: SVGLineElement | null = null;
+  /* 선택한 메시지 양 끝의 ■ 핸들 (보낸이·받는이 변경) */
+  private endpointGroup: SVGGElement | null = null;
+  /* 보낸이·받는이를 바꾸는 중에 그리는 점선과 대상 생명선 강조 */
+  private reconnectGroup: SVGGElement | null = null;
   /* 메시지가 올라갈 수 있는 가장 위 / 내려갈 수 있는 가장 아래 */
   private top = 0;
   private bottom = 0;
@@ -165,6 +177,7 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     this.hitGroup?.remove();
     this.overlayGroup?.remove();
     this.hitGroup = this.overlayGroup = this.selectionBox = this.indicator = null;
+    this.endpointGroup = this.reconnectGroup = null;
     this.svg = null;
     this.participants.clear();
     this.messages = [];
@@ -243,11 +256,22 @@ export class SequenceDiagramOverlay implements OverlayLayer {
           x1,
           x2,
           y: Number(el.getAttribute('y1')),
+          height: 0,
         });
       } else {
         const box = el.getBBox();
         const owner = nearestById(box.x, lifelines, LIFELINE_SNAP_DISTANCE);
-        found.push({ ...base, el, from: owner, to: owner, self: true, x1: box.x, x2: box.x, y: box.y });
+        found.push({
+          ...base,
+          el,
+          from: owner,
+          to: owner,
+          self: true,
+          x1: box.x,
+          x2: box.x,
+          y: box.y,
+          height: box.height,
+        });
       }
     }
     const keys = assignMessageKeys(found);
@@ -298,11 +322,17 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     indicator.setAttribute('vector-effect', 'non-scaling-stroke');
     indicator.setAttribute('pointer-events', 'none');
     indicator.setAttribute('display', 'none');
-    group.append(box, indicator);
+    const endpoints = document.createElementNS(SVG_NS, 'g');
+    endpoints.classList.add('unidia-endpoints');
+    const reconnect = document.createElementNS(SVG_NS, 'g');
+    reconnect.setAttribute('pointer-events', 'none');
+    group.append(box, indicator, endpoints, reconnect);
     svg.appendChild(group);
     this.overlayGroup = group;
     this.selectionBox = box;
     this.indicator = indicator;
+    this.endpointGroup = endpoints;
+    this.reconnectGroup = reconnect;
   }
 
   // ── 그리기 ────────────────────────────────────────────────
@@ -375,10 +405,44 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     } else {
       this.selectionBox.setAttribute('display', 'none');
     }
+    let selectedMessage: Message | undefined;
     for (const message of this.messages) {
       const selected = selection?.kind === 'message' && message.key === selection.key;
+      if (selected) selectedMessage = message;
       message.hit?.setAttribute('stroke', selected ? 'rgba(26, 115, 232, 0.25)' : 'transparent');
     }
+
+    // 선택한 메시지 양 끝의 ■ 핸들: 끌어서 다른 참여자에 놓으면 보낸이·받는이가 바뀐다
+    this.endpointGroup?.replaceChildren();
+    const ends = selectedMessage ? this.messageEnds(selectedMessage) : null;
+    if (ends) {
+      (['start', 'end'] as const).forEach((end, i) => {
+        const square = document.createElementNS(SVG_NS, 'rect');
+        square.classList.add('unidia-endpoint');
+        square.dataset.unidiaEndpoint = end;
+        square.setAttribute('x', String(ends[i].x - ENDPOINT_SIZE / 2));
+        square.setAttribute('y', String(ends[i].y - ENDPOINT_SIZE / 2));
+        square.setAttribute('width', String(ENDPOINT_SIZE));
+        square.setAttribute('height', String(ENDPOINT_SIZE));
+        square.setAttribute('fill', ACCENT);
+        square.setAttribute('stroke', '#fff');
+        square.setAttribute('stroke-width', '1');
+        square.setAttribute('vector-effect', 'non-scaling-stroke');
+        this.endpointGroup!.appendChild(square);
+      });
+    }
+  }
+
+  /* 메시지의 보낸이 쪽·받는이 쪽 끝 (생명선 위). 자기 자신에게 보내는 메시지는 곡선의 위·아래 끝. */
+  private messageEnds(message: Message): [Point, Point] | null {
+    const from = message.from ? this.participants.get(message.from) : undefined;
+    const to = message.to ? this.participants.get(message.to) : undefined;
+    if (!from || !to) return null;
+    const y = message.y + message.dy;
+    return [
+      { x: from.x, y },
+      { x: to.x, y: y + message.height },
+    ];
   }
 
   /* 옮긴 참여자가 잘리지 않도록 보이는 영역(viewBox)을 다이어그램 전체에 맞춘다. */
@@ -402,6 +466,15 @@ export class SequenceDiagramOverlay implements OverlayLayer {
   private onPointerDown(e: PointerEvent): void {
     if (e.button !== 0 || !this.svg) return;
     const target = e.target as Element;
+
+    const endpointEl = target.closest<SVGElement>('[data-unidia-endpoint]');
+    const selected = this.selection;
+    const selectedMessage =
+      selected?.kind === 'message' ? this.messages.find((m) => m.key === selected.key) : undefined;
+    if (endpointEl && selectedMessage) {
+      this.dragMessageEnd(e, selectedMessage, endpointEl.dataset.unidiaEndpoint === 'start' ? 'start' : 'end');
+      return;
+    }
 
     const id = target.closest<SVGElement>('[data-unidia-participant]')?.dataset.unidiaParticipant;
     const participant = id ? this.participants.get(id) : undefined;
@@ -505,6 +578,49 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     });
   }
 
+  /*
+   * 메시지 끝 ■ 핸들을 끌어 다른 참여자 생명선에 놓으면 보낸이(start)나 받는이(end)를 바꾼다.
+   * 끄는 동안 반대쪽 끝에서 마우스까지 점선을 그리고, 가장 가까운 생명선을 초록색으로 강조한다.
+   */
+  private dragMessageEnd(e: PointerEvent, message: Message, end: 'start' | 'end'): void {
+    const ends = this.messageEnds(message);
+    if (!ends) return;
+    const index = this.messages.indexOf(message);
+    const [startPoint, endPoint] = ends;
+    const fixed = end === 'start' ? endPoint : startPoint;
+    const grabbed = end === 'start' ? startPoint : endPoint;
+    const current = end === 'start' ? message.from : message.to;
+    const lifelines = () => [...this.participants.values()].map((p) => ({ id: p.id, value: p.x }));
+    let target: string | null = null;
+
+    this.trackPointer(e, {
+      move: (dx, dy) => {
+        const cursor = { x: grabbed.x + dx, y: grabbed.y + dy };
+        const hovered = nearestById(cursor.x, lifelines(), LIFELINE_PICK_DISTANCE);
+        target = hovered !== current ? hovered : null;
+        this.drawReconnect(fixed, cursor, target);
+      },
+      commit: () => {
+        this.reconnectGroup?.replaceChildren();
+        if (target) this.options.onMessageReconnect(index, end, target, message.key);
+      },
+      cancel: () => this.reconnectGroup?.replaceChildren(),
+    });
+  }
+
+  private drawReconnect(from: Point, cursor: Point, target: string | null): void {
+    const group = this.reconnectGroup;
+    if (!group) return;
+    group.replaceChildren();
+    group.appendChild(svgLine(from, cursor, ACCENT, '5 4', 1.5));
+    const participant = target ? this.participants.get(target) : undefined;
+    if (participant) {
+      const top = { x: participant.x, y: this.top };
+      const bottom = { x: participant.x, y: this.bottom };
+      group.appendChild(svgLine(top, bottom, REORDER_COLOR, '4 3', 3));
+    }
+  }
+
   /* 메시지가 놓일 자리(target번째 앞)에 가로 점선을 그린다. target이 null이면 숨긴다. */
   private showIndicator(target: number | null, others: readonly number[]): void {
     const indicator = this.indicator;
@@ -581,6 +697,19 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     const point = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
     return { x: point.x, y: point.y };
   }
+}
+
+function svgLine(a: Point, b: Point, color: string, dash: string, width: number): SVGLineElement {
+  const line = document.createElementNS(SVG_NS, 'line');
+  line.setAttribute('x1', String(a.x));
+  line.setAttribute('y1', String(a.y));
+  line.setAttribute('x2', String(b.x));
+  line.setAttribute('y2', String(b.y));
+  line.setAttribute('stroke', color);
+  line.setAttribute('stroke-width', String(width));
+  line.setAttribute('stroke-dasharray', dash);
+  line.setAttribute('vector-effect', 'non-scaling-stroke');
+  return line;
 }
 
 function movable(el: SVGGraphicsElement): Movable {
