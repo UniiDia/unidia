@@ -9,6 +9,7 @@ import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
 import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
 import { makeBenchmarkCode, runOverlayBenchmark, waitFor } from '../overlay/benchmark';
+import { parseEdgeKey, reconnectEdge } from '../overlay/reconnect';
 import { RenderEngine } from '../render/RenderEngine';
 import { type DiagramType, detectDiagramType } from '../render/diagramTypes';
 
@@ -30,7 +31,7 @@ const HISTORY_DEBOUNCE_MS = 400;
 const BENCHMARK_MODE = new URLSearchParams(location.search).has('bench');
 
 const HINTS: Record<DiagramType, string> = {
-  class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제',
+  class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제 · 선 끝 ■ 드래그: 다시 연결',
   sequence: '시퀀스 다이어그램은 아직 GUI 편집을 지원하지 않습니다',
 };
 
@@ -52,6 +53,7 @@ export class App {
       this.preview(() => this.model.setEdgePath(edgeKey, waypoints)),
     onEdgePathCommit: (edgeKey, waypoints, prev) =>
       this.commitOverlayEdit(new SetEdgePathCommand(this.model, edgeKey, waypoints, { prev })),
+    onEdgeReconnect: (edgeKey, end, nodeId) => this.reconnectEdge(edgeKey, end, nodeId),
   });
   /** 드래그 미리보기 중에는 오버레이가 이미 화면을 그렸으므로 다시 그리지 않는다. */
   private previewing = false;
@@ -211,6 +213,23 @@ export class App {
     } finally {
       this.previewing = false;
     }
+  }
+
+  /**
+   * 선의 시작/끝을 다른 노드로 다시 연결: Mermaid 코드의 관계 줄에서 클래스 이름을 바꾸고
+   * SetCodeCommand로 기록한다 (Ctrl+Z로 되돌릴 수 있음).
+   */
+  private reconnectEdge(edgeKey: string, end: 'start' | 'end', nodeId: string): void {
+    this.flushPendingInput();
+    const prev = this.model.getState().code;
+    const ref = parseEdgeKey(edgeKey);
+    const next = ref ? reconnectEdge(prev, ref, end, nodeId) : null;
+    if (!next || next === prev) {
+      this.status.textContent = '코드에서 이 연결선의 관계 줄을 찾지 못했습니다';
+      return;
+    }
+    this.history.execute(new SetCodeCommand(this.model, prev, next));
+    this.updateButtons();
   }
 
   private commitOverlayEdit(command: Command): void {
