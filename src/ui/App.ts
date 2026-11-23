@@ -10,10 +10,12 @@ import { exportStrategies } from '../export/ExportStrategy';
 import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
 import type { OverlayCallbacks } from '../overlay/OverlayLayer';
 import { SequenceDiagramOverlay } from '../overlay/SequenceDiagramOverlay';
+import { moveMessage } from '../overlay/sequenceCode';
 import { makeBenchmarkCode, runOverlayBenchmark, waitFor } from '../overlay/benchmark';
 import { parseEdgeKey, reconnectEdge } from '../overlay/reconnect';
 import { RenderEngine } from '../render/RenderEngine';
 import { type DiagramType, detectDiagramType } from '../render/diagramTypes';
+import { BatchCommand } from './BatchCommand';
 
 const SAMPLE_CODE = `classDiagram
   class Animal {
@@ -34,7 +36,7 @@ const BENCHMARK_MODE = new URLSearchParams(location.search).has('bench');
 
 const HINTS: Record<DiagramType, string> = {
   class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제 · 선 끝 ■ 드래그: 다시 연결',
-  sequence: '참여자 드래그: 좌우 이동 · 메시지 드래그: 위아래 간격 조정 (순서는 유지)',
+  sequence: '참여자 드래그: 좌우 이동 · 메시지 드래그: 간격 조정, 다른 메시지를 넘어가면 순서 변경',
 };
 
 /** UI 계층: 코드 에디터와 캔버스를 항상 함께 표시한다 (REQ-10). */
@@ -60,8 +62,11 @@ export class App {
     ...this.overlayCallbacks,
     onEdgeReconnect: (edgeKey, end, nodeId) => this.reconnectEdge(edgeKey, end, nodeId),
   });
-  /** 시퀀스 다이어그램 오버레이 (참여자 좌우 이동, 메시지 간격 조정) */
-  private sequenceOverlay = new SequenceDiagramOverlay(this.overlayCallbacks);
+  /** 시퀀스 다이어그램 오버레이 (참여자 좌우 이동, 메시지 간격 조정·순서 변경) */
+  private sequenceOverlay = new SequenceDiagramOverlay({
+    ...this.overlayCallbacks,
+    onMessageReorder: (from, to, key) => this.reorderMessage(from, to, key),
+  });
   /** 드래그 미리보기 중에는 오버레이가 이미 화면을 그렸으므로 다시 그리지 않는다. */
   private previewing = false;
 
@@ -241,6 +246,26 @@ export class App {
       return;
     }
     this.history.execute(new SetCodeCommand(this.model, prev, next));
+    this.updateButtons();
+  }
+
+  /**
+   * 시퀀스 메시지 순서 변경: 코드의 메시지 줄을 옮기고, 옮긴 메시지에 저장된 간격 조정은 지운다
+   * (새 자리에서는 의미가 없으므로). 둘을 묶어 실행 취소 한 번에 되돌린다.
+   */
+  private reorderMessage(from: number, to: number, key: string | null): void {
+    this.flushPendingInput();
+    const prev = this.model.getState().code;
+    const next = moveMessage(prev, from, to);
+    if (!next || next === prev) {
+      this.status.textContent = '코드에서 메시지 줄을 찾지 못해 순서를 바꾸지 못했습니다';
+      return;
+    }
+    const commands: Command[] = [new SetCodeCommand(this.model, prev, next)];
+    if (key && this.model.getState().edgePaths[key]) {
+      commands.push(new SetEdgePathCommand(this.model, key, undefined));
+    }
+    this.history.execute(commands.length === 1 ? commands[0] : new BatchCommand(commands));
     this.updateButtons();
   }
 

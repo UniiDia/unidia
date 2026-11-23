@@ -1,6 +1,14 @@
 import type { NodeLayout, Point } from '../core/DiagramModel';
 import type { OverlayCallbacks, OverlayLayer } from './OverlayLayer';
-import { assignMessageKeys, clamp, messageRange, nearestById, noteOwner, parseTranslate } from './geometry';
+import {
+  assignMessageKeys,
+  clamp,
+  insertionIndex,
+  messageRange,
+  nearestById,
+  noteOwner,
+  parseTranslate,
+} from './geometry';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const ACCENT = '#1a73e8';
@@ -13,6 +21,9 @@ const LIFELINE_SNAP_DISTANCE = 30;
 const FIT_PADDING = 16;
 /* 이 거리(px) 미만으로 움직이면 클릭으로 보고 편집으로 기록하지 않는다 */
 const DRAG_THRESHOLD = 2;
+/* 순서를 바꿀 때 놓일 자리 표시선 */
+const REORDER_COLOR = '#1e8e3e';
+const INDICATOR_OVERHANG = 60;
 
 /*
  * 모델에 저장할 때 붙이는 접두어. 클래스 다이어그램의 노드 이름과 섞이지 않게 한다.
@@ -62,12 +73,21 @@ interface Message {
 
 type Selection = { kind: 'participant'; id: string } | { kind: 'message'; key: string } | null;
 
+export interface SequenceDiagramOverlayOptions extends OverlayCallbacks {
+  /*
+   * 메시지를 끌어 다른 메시지를 넘어간 자리에 놓았을 때 (순서 변경).
+   * from·to는 메시지끼리 센 순서(0부터). 코드의 메시지 줄을 옮기는 일은 호출한 쪽에서 한다.
+   */
+  onMessageReorder(from: number, to: number, key: string | null): void;
+}
+
 /*
  * 시퀀스 다이어그램용 오버레이. 시퀀스에서는 위→아래 순서가 곧 시간 순서라 클래스 다이어그램처럼
  * 자유롭게 옮기지 않고, 시퀀스에 맞는 두 가지 움직임만 제공한다.
  * - 참여자 좌우 이동 (REQ-02): 위·아래 상자를 끌면 생명선과 함께 옆으로 움직인다.
  *   연결된 메시지 화살표는 양 끝이 생명선에 붙은 채 늘어나거나 줄어든다 (REQ-04). 노트·활성 상자도 따라간다.
- * - 메시지 간격 조정: 메시지 화살표를 위아래로 끈다. 바로 위·아래 메시지를 넘지 못해 순서는 유지된다.
+ * - 메시지 간격 조정: 메시지 화살표를 위아래로 끈다. 바로 위·아래 메시지 사이에 놓으면 간격만 바뀐다.
+ * - 메시지 순서 변경: 다른 메시지를 넘어가면 놓일 자리에 표시선이 보이고, 놓으면 코드의 메시지 줄 순서가 바뀐다.
  * 결과는 클래스 다이어그램과 같은 방식으로 콜백에 넘긴다 (미리보기 → { prev }로 한 번 기록).
  */
 export class SequenceDiagramOverlay implements OverlayLayer {
@@ -77,6 +97,8 @@ export class SequenceDiagramOverlay implements OverlayLayer {
   private hitGroup: SVGGElement | null = null;
   private overlayGroup: SVGGElement | null = null;
   private selectionBox: SVGRectElement | null = null;
+  /* 메시지 순서를 바꿀 때 놓일 자리를 보여주는 선 */
+  private indicator: SVGLineElement | null = null;
   /* 메시지가 올라갈 수 있는 가장 위 / 내려갈 수 있는 가장 아래 */
   private top = 0;
   private bottom = 0;
@@ -87,7 +109,7 @@ export class SequenceDiagramOverlay implements OverlayLayer {
   private cleanups: (() => void)[] = [];
   private frame = 0;
 
-  constructor(private options: OverlayCallbacks) {}
+  constructor(private options: SequenceDiagramOverlayOptions) {}
 
   attach(
     svg: SVGSVGElement,
@@ -142,7 +164,7 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     this.frame = 0;
     this.hitGroup?.remove();
     this.overlayGroup?.remove();
-    this.hitGroup = this.overlayGroup = this.selectionBox = null;
+    this.hitGroup = this.overlayGroup = this.selectionBox = this.indicator = null;
     this.svg = null;
     this.participants.clear();
     this.messages = [];
@@ -269,10 +291,18 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     box.setAttribute('stroke-dasharray', '4 3');
     box.setAttribute('vector-effect', 'non-scaling-stroke');
     box.setAttribute('pointer-events', 'none');
-    group.appendChild(box);
+    const indicator = document.createElementNS(SVG_NS, 'line');
+    indicator.setAttribute('stroke', REORDER_COLOR);
+    indicator.setAttribute('stroke-width', '2');
+    indicator.setAttribute('stroke-dasharray', '6 4');
+    indicator.setAttribute('vector-effect', 'non-scaling-stroke');
+    indicator.setAttribute('pointer-events', 'none');
+    indicator.setAttribute('display', 'none');
+    group.append(box, indicator);
     svg.appendChild(group);
     this.overlayGroup = group;
     this.selectionBox = box;
+    this.indicator = indicator;
   }
 
   // ── 그리기 ────────────────────────────────────────────────
@@ -420,30 +450,78 @@ export class SequenceDiagramOverlay implements OverlayLayer {
     });
   }
 
-  /* 메시지 위아래 이동: 바로 위·아래 메시지 사이에서만 움직여 순서(시간)는 그대로 둔다. */
+  /*
+   * 메시지 위아래 이동.
+   * - 바로 위·아래 메시지 사이에 놓으면: 간격만 바뀐다 (SetEdgePathCommand로 기록).
+   * - 다른 메시지를 넘어가면: 놓일 자리에 초록 점선이 보이고, 놓으면 순서가 바뀐다 (코드의 메시지 줄을 옮김).
+   */
   private dragMessage(e: PointerEvent, message: Message): void {
     if (!message.key) return;
     const key = message.key;
+    const index = this.messages.indexOf(message);
     const originDy = message.dy;
     const currentY = message.y + originDy;
+    // 나를 뺀 나머지 메시지의 세로 위치 (메시지 순서대로 = 위에서 아래로)
     const others = this.messages.filter((m) => m !== message).map((m) => m.y + m.dy);
-    const range = messageRange(currentY, others, this.top + MIN_MESSAGE_GAP, this.bottom - MIN_MESSAGE_GAP, MIN_MESSAGE_GAP);
+    const top = this.top + MIN_MESSAGE_GAP;
+    const bottom = this.bottom - MIN_MESSAGE_GAP;
+    const gapRange = messageRange(currentY, others, top, bottom, MIN_MESSAGE_GAP);
     const prev = this.savedPaths[key] ? this.savedPaths[key].map((p) => ({ ...p })) : undefined;
     const value = () => (message.dy !== 0 ? [{ x: 0, y: message.dy }] : undefined);
+    let target = index;
 
     this.trackPointer(e, {
       move: (_dx, dy) => {
-        message.dy = clamp(currentY + dy, range.min, range.max) - message.y;
+        const y = clamp(currentY + dy, top, bottom);
+        target = insertionIndex(y, others);
+        if (target === index) {
+          message.dy = clamp(y, gapRange.min, gapRange.max) - message.y;
+          this.showIndicator(null, others);
+          this.options.onEdgePathPreview(key, value());
+        } else {
+          message.dy = y - message.y; // 다른 메시지를 넘어가는 중: 마우스를 그대로 따라간다
+          this.showIndicator(target, others);
+        }
         this.applyMessage(message);
-        this.options.onEdgePathPreview(key, value());
       },
-      commit: () => this.options.onEdgePathCommit(key, value(), prev),
+      commit: () => {
+        this.showIndicator(null, others);
+        if (target === index) {
+          this.options.onEdgePathCommit(key, value(), prev);
+          return;
+        }
+        // 순서 변경: 화면은 원래대로 돌려 두고, 코드가 바뀌면 Mermaid가 새 순서로 다시 그린다
+        message.dy = originDy;
+        this.applyMessage(message);
+        this.options.onEdgePathPreview(key, prev);
+        this.options.onMessageReorder(index, target, key);
+      },
       cancel: () => {
+        this.showIndicator(null, others);
         message.dy = originDy;
         this.applyMessage(message);
         this.options.onEdgePathPreview(key, prev);
       },
     });
+  }
+
+  /* 메시지가 놓일 자리(target번째 앞)에 가로 점선을 그린다. target이 null이면 숨긴다. */
+  private showIndicator(target: number | null, others: readonly number[]): void {
+    const indicator = this.indicator;
+    if (!indicator) return;
+    if (target === null) {
+      indicator.setAttribute('display', 'none');
+      return;
+    }
+    const above = target > 0 ? others[target - 1] : this.top;
+    const below = target < others.length ? others[target] : this.bottom;
+    const y = (above + below) / 2;
+    const xs = [...this.participants.values()].map((p) => p.x);
+    indicator.setAttribute('x1', String(Math.min(...xs) - INDICATOR_OVERHANG));
+    indicator.setAttribute('x2', String(Math.max(...xs) + INDICATOR_OVERHANG));
+    indicator.setAttribute('y1', String(y));
+    indicator.setAttribute('y2', String(y));
+    indicator.removeAttribute('display');
   }
 
   /* 드래그 공통 처리 (ClassDiagramOverlay와 같은 방식): 화면 갱신 주기마다 move, 움직였으면 놓을 때 commit. */

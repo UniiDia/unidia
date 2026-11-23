@@ -338,3 +338,8 @@ export function messageRange(
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
+
+/* y 위치에 놓으면 몇 번째 자리가 되는지 = 나머지 메시지 중 y보다 위에 있는 개수 (otherYs는 위에서 아래 순서) */
+export function insertionIndex(y: number, otherYs: readonly number[]): number {
+  return otherYs.filter((other) => other < y).length;
+}

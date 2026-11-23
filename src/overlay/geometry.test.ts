@@ -10,6 +10,7 @@ import {
   distanceToSegment,
   edgeKey,
   findAttachedNode,
+  insertionIndex,
   messageRange,
   nearestById,
   noteOwner,
@@ -219,5 +220,12 @@ describe('시퀀스 다이어그램', () => {
     expect(messageRange(173, [121, 229, 420], 80, 440, 12)).toEqual({ min: 133, max: 217 });
     expect(messageRange(121, [173, 229], 80, 440, 12)).toEqual({ min: 80, max: 161 }); // 첫 메시지
     expect(clamp(300, 133, 217)).toBe(217);
+  });
+
+  it('놓은 위치로 새 순서를 구한다 (위에 있는 메시지 개수)', () => {
+    const others = [121, 229, 420]; // 나를 뺀 메시지들
+    expect(insertionIndex(100, others)).toBe(0); // 맨 앞으로
+    expect(insertionIndex(180, others)).toBe(1); // 첫 번째 다음
+    expect(insertionIndex(500, others)).toBe(3); // 맨 뒤로
   });
 });
