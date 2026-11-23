@@ -1,3 +1,6 @@
+import { applyPaletteForExport } from './palette';
+import { applyPaletteToSvg } from './svgPalette';
+
 /** Strategy 패턴: 내보내기 형식별 알고리즘을 교체 가능하게 한다 (REQ-08). */
 export interface ExportInput {
   /** 현재 렌더링된 SVG */
@@ -13,14 +16,17 @@ export interface ExportStrategy {
   export(input: ExportInput): Promise<Blob>;
 }
 
-/** Mermaid 코드(.mmd) 내보내기 */
+/**
+ * Mermaid 코드(.mmd) 내보내기.
+ * REQ-09: 사용자 지정 색을 팔레트 토큰으로 바꾸고 팔레트 classDef(c1~c4)를 포함한다.
+ */
 export class MermaidCodeExport implements ExportStrategy {
   readonly id = 'mermaid' as const;
   readonly extension = 'mmd';
   readonly mimeType = 'text/plain';
 
   async export({ code }: ExportInput): Promise<Blob> {
-    return new Blob([code], { type: this.mimeType });
+    return new Blob([applyPaletteForExport(code)], { type: this.mimeType });
   }
 }
 
@@ -81,17 +87,17 @@ export class RasterImageExport implements ExportStrategy {
     }
   }
 
-  async export({ svg }: ExportInput): Promise<Blob> {
+  async export({ svg, code }: ExportInput): Promise<Blob> {
     if (!svg.trim()) {
       throw new Error('내보낼 다이어그램이 없습니다. 먼저 코드를 렌더링해 주세요.');
     }
 
     try {
-      return await this.rasterize(prepareSvg(svg, this.options.minWidth, false));
+      return await this.rasterize(prepareSvg(svg, code, this.options.minWidth, false));
     } catch (error) {
       if (!isTaintOrLoadError(error)) throw error;
       // foreignObject 때문에 실패한 경우: SVG <text>로 바꿔서 재시도한다.
-      return await this.rasterize(prepareSvg(svg, this.options.minWidth, true));
+      return await this.rasterize(prepareSvg(svg, code, this.options.minWidth, true));
     }
   }
 
@@ -119,8 +125,14 @@ export class RasterImageExport implements ExportStrategy {
  * - Mermaid 출력은 width="100%" + style="max-width:…" 형태라 <img>로 그리면 크기가 정해지지 않는다.
  *   viewBox를 기준으로 고정 width/height를 지정한다.
  * - 벡터 상태에서 목표 해상도로 키워야 래스터화 후 흐려지지 않는다.
+ * - REQ-09: 사용자 지정 색을 흑백 인쇄용 팔레트 색으로 바꾼다 (화면 SVG는 그대로, 내보내는 사본만).
  */
-function prepareSvg(svgText: string, minWidth: number, replaceForeignObjects: boolean): PreparedSvg {
+function prepareSvg(
+  svgText: string,
+  code: string,
+  minWidth: number,
+  replaceForeignObjects: boolean,
+): PreparedSvg {
   // Mermaid 출력에는 <br> 같은 HTML 표기가 섞여 있어 XML 파서로는 깨질 수 있다.
   // HTML 파서로 읽은 뒤 XMLSerializer로 다시 직렬화하면 올바른 XML이 된다.
   const doc = new DOMParser().parseFromString(svgText, 'text/html');
@@ -145,6 +157,8 @@ function prepareSvg(svgText: string, minWidth: number, replaceForeignObjects: bo
   svg.setAttribute('height', String(height));
   svg.style.removeProperty('max-width');
 
+  // 글자색을 span에 넣어 두므로, foreignObject 변환보다 먼저 해야 변환된 <text>에도 반영된다.
+  applyPaletteToSvg(svg, code);
   if (replaceForeignObjects) convertForeignObjectsToText(svg);
 
   return { xml: new XMLSerializer().serializeToString(svg), width, height };
@@ -242,7 +256,8 @@ function convertForeignObjectsToText(svg: SVGSVGElement): void {
     text.setAttribute('dominant-baseline', 'central');
     text.setAttribute('font-family', '"trebuchet ms", verdana, arial, sans-serif');
     text.setAttribute('font-size', '14');
-    text.setAttribute('fill', '#333333');
+    // 라벨에 지정된 글자색(REQ-09 팔레트 변환 포함)을 유지한다. 없으면 Mermaid 기본 글자색.
+    text.setAttribute('fill', labelColor(fo) ?? '#333333');
 
     const lineHeight = height > 0 ? Math.min(height / lines.length, 20) : 18;
     const firstY = y + height / 2 - ((lines.length - 1) * lineHeight) / 2;
@@ -256,6 +271,16 @@ function convertForeignObjectsToText(svg: SVGSVGElement): void {
 
     fo.replaceWith(text);
   }
+}
+
+/** foreignObject 안 HTML 요소의 inline style에서 글자색을 찾는다 (가장 안쪽 요소 우선). */
+function labelColor(fo: Element): string | null {
+  const styled = Array.from(fo.querySelectorAll('[style]')).reverse();
+  for (const el of styled) {
+    const m = /(?:^|;)\s*color\s*:\s*([^;!]+)/i.exec(el.getAttribute('style') ?? '');
+    if (m) return m[1].trim();
+  }
+  return null;
 }
 
 /** 이미지 로드 실패를 구분하기 위한 오류 */
