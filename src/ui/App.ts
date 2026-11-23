@@ -44,6 +44,8 @@ export class App {
         <button data-action="undo">실행 취소 (Ctrl+Z)</button>
         <button data-action="redo">다시 실행 (Ctrl+Y)</button>
         <button data-action="export-mermaid">Mermaid 코드 내보내기</button>
+        <button data-action="export-png">PNG 내보내기</button>
+        <button data-action="export-jpg">JPG 내보내기</button>
         <span class="status"></span>
       </div>
       <div class="panes">
@@ -73,6 +75,12 @@ export class App {
     this.root
       .querySelector('[data-action="export-mermaid"]')!
       .addEventListener('click', () => void this.exportAs('mermaid'));
+    this.root
+      .querySelector('[data-action="export-png"]')!
+      .addEventListener('click', () => void this.exportAs('png'));
+    this.root
+      .querySelector('[data-action="export-jpg"]')!
+      .addEventListener('click', () => void this.exportAs('jpg'));
     document.addEventListener('keydown', (e) => this.onKeyDown(e));
 
     this.updateButtons();
