@@ -8,6 +8,8 @@ import {
 import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
 import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
+import type { OverlayCallbacks } from '../overlay/OverlayLayer';
+import { SequenceDiagramOverlay } from '../overlay/SequenceDiagramOverlay';
 import { makeBenchmarkCode, runOverlayBenchmark, waitFor } from '../overlay/benchmark';
 import { parseEdgeKey, reconnectEdge } from '../overlay/reconnect';
 import { RenderEngine } from '../render/RenderEngine';
@@ -32,7 +34,7 @@ const BENCHMARK_MODE = new URLSearchParams(location.search).has('bench');
 
 const HINTS: Record<DiagramType, string> = {
   class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제 · 선 끝 ■ 드래그: 다시 연결',
-  sequence: '시퀀스 다이어그램은 아직 GUI 편집을 지원하지 않습니다',
+  sequence: '참여자 드래그: 좌우 이동 · 메시지 드래그: 위아래 간격 조정 (순서는 유지)',
 };
 
 /** UI 계층: 코드 에디터와 캔버스를 항상 함께 표시한다 (REQ-10). */
@@ -45,16 +47,21 @@ export class App {
    * 드래그 중에는 setNodeLayout/setEdgePath로 모델에 미리보기만 반영하고,
    * 드래그가 끝나면 시작 전 값을 { prev }로 넘겨 히스토리에 한 번만 기록한다.
    */
-  private overlay = new ClassDiagramOverlay({
+  private overlayCallbacks: OverlayCallbacks = {
     onLayoutPreview: (nodeId, layout) => this.preview(() => this.model.setNodeLayout(nodeId, layout)),
     onLayoutCommit: (nodeId, layout, prev) =>
       this.commitOverlayEdit(new MoveNodeCommand(this.model, nodeId, layout, { prev })),
-    onEdgePathPreview: (edgeKey, waypoints) =>
-      this.preview(() => this.model.setEdgePath(edgeKey, waypoints)),
-    onEdgePathCommit: (edgeKey, waypoints, prev) =>
-      this.commitOverlayEdit(new SetEdgePathCommand(this.model, edgeKey, waypoints, { prev })),
+    onEdgePathPreview: (edgeKey, points) => this.preview(() => this.model.setEdgePath(edgeKey, points)),
+    onEdgePathCommit: (edgeKey, points, prev) =>
+      this.commitOverlayEdit(new SetEdgePathCommand(this.model, edgeKey, points, { prev })),
+  };
+  /** 클래스 다이어그램 오버레이 (REQ-02·04·05, 엣지 다시 연결) */
+  private overlay = new ClassDiagramOverlay({
+    ...this.overlayCallbacks,
     onEdgeReconnect: (edgeKey, end, nodeId) => this.reconnectEdge(edgeKey, end, nodeId),
   });
+  /** 시퀀스 다이어그램 오버레이 (참여자 좌우 이동, 메시지 간격 조정) */
+  private sequenceOverlay = new SequenceDiagramOverlay(this.overlayCallbacks);
   /** 드래그 미리보기 중에는 오버레이가 이미 화면을 그렸으므로 다시 그리지 않는다. */
   private previewing = false;
 
@@ -195,15 +202,20 @@ export class App {
 
   /** 마지막으로 렌더링한 SVG를 캔버스에 놓고, 저장된 노드 위치·크기를 오버레이로 적용한다. */
   private showDiagram(): void {
-    this.overlay.detach();
+    this.detachOverlays();
     if (!this.lastSvg) return;
     this.canvas.innerHTML = this.lastSvg;
     this.hint.textContent = this.lastType ? HINTS[this.lastType] : '';
     const svg = this.canvas.querySelector('svg');
-    if (svg && this.lastType === 'class') {
-      const { nodeLayouts, edgePaths } = this.model.getState();
-      this.overlay.attach(svg, nodeLayouts, edgePaths);
-    }
+    if (!svg || !this.lastType) return;
+    const { nodeLayouts, edgePaths } = this.model.getState();
+    const overlay = this.lastType === 'class' ? this.overlay : this.sequenceOverlay;
+    overlay.attach(svg, nodeLayouts, edgePaths);
+  }
+
+  private detachOverlays(): void {
+    this.overlay.detach();
+    this.sequenceOverlay.detach();
   }
 
   private preview(apply: () => void): void {
@@ -270,7 +282,7 @@ export class App {
   }
 
   private showError(message: string): void {
-    this.overlay.detach();
+    this.detachOverlays();
     this.lastSvg = '';
     this.hint.textContent = '';
     this.canvas.innerHTML = '';

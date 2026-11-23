@@ -1,5 +1,5 @@
 import type { NodeLayout, Point } from '../core/DiagramModel';
-import type { OverlayLayer } from './OverlayLayer';
+import type { OverlayCallbacks, OverlayLayer } from './OverlayLayer';
 import {
   type SizedLayout,
   assignEdgeKeys,
@@ -86,20 +86,8 @@ interface EdgeInfo {
 
 type Selection = { kind: 'node'; id: string } | { kind: 'edge'; key: string } | null;
 
-/*
- * 오버레이 → 모델 연결 (UniDia 가이드 "core 사용 규칙 1"):
- * 드래그 중에는 preview로 모델에 미리보기만 반영하고, 드래그가 끝나면 commit으로 한 번만 기록한다.
- * commit의 prev는 드래그를 시작하기 전 모델 값이다 (처음 편집이면 undefined).
- */
-export interface ClassDiagramOverlayOptions {
-  /* 노드 드래그·크기 조절 중 매 프레임. 취소되면 시작 전 값(undefined일 수 있음)으로 다시 부른다. */
-  onLayoutPreview(nodeId: string, layout: NodeLayout | undefined): void;
-  /* 노드 드래그·크기 조절을 마쳤을 때. MoveNodeCommand(..., { prev })로 기록한다. */
-  onLayoutCommit(nodeId: string, layout: SizedLayout, prev: NodeLayout | undefined): void;
-  /* 꺾임점을 끄는 중 매 프레임. 취소되면 시작 전 값으로 다시 부른다. */
-  onEdgePathPreview(edgeKey: string, waypoints: Point[] | undefined): void;
-  /* 꺾임점을 추가·이동·삭제했을 때 (모두 지우면 undefined). SetEdgePathCommand(..., { prev })로 기록한다. */
-  onEdgePathCommit(edgeKey: string, waypoints: Point[] | undefined, prev: Point[] | undefined): void;
+/* 콜백 설명은 OverlayLayer.ts의 OverlayCallbacks 참고 */
+export interface ClassDiagramOverlayOptions extends OverlayCallbacks {
   /* 선의 시작/끝을 다른 노드에 놓았을 때. 코드의 관계 줄을 바꾸는 일은 호출한 쪽에서 한다. */
   onEdgeReconnect(edgeKey: string, end: 'start' | 'end', nodeId: string): void;
 }
