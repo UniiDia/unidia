@@ -254,3 +254,92 @@ export function resizeFromBottomRight(
   const height = Math.max(minHeight, origin.height + dy);
   return { x: left + width / 2, y: top + height / 2, width, height };
 }
+
+// ── 시퀀스 다이어그램 ───────────────────────────────────────
+
+/* 기준값(value)에 가장 가까운 항목 이름. maxDistance보다 멀면 null. (예: 메시지 끝 x → 가장 가까운 생명선) */
+export function nearestById(
+  value: number,
+  items: ReadonlyArray<{ id: string; value: number }>,
+  maxDistance: number,
+): string | null {
+  let best: string | null = null;
+  let bestDistance = maxDistance;
+  for (const item of items) {
+    const distance = Math.abs(item.value - value);
+    if (distance <= bestDistance) {
+      best = item.id;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+/*
+ * 노트가 어느 참여자의 것인지 찾는다 (참여자를 옮길 때 같이 옮기려고).
+ * Mermaid는 "right of X"면 생명선 오른쪽 25px, "left of X"면 왼쪽 25px, "over X"면 생명선 가운데에 노트를 둔다.
+ */
+export function noteOwner(
+  rect: Rect,
+  lifelines: ReadonlyArray<{ id: string; x: number }>,
+  maxDistance = 40,
+): string | null {
+  const NOTE_MARGIN = 25;
+  let best: string | null = null;
+  let bestScore = maxDistance;
+  for (const { id, x } of lifelines) {
+    const score = Math.min(
+      Math.abs(rect.x - x - NOTE_MARGIN), // right of
+      Math.abs(rect.x + rect.width - x + NOTE_MARGIN), // left of
+      Math.abs(rect.x + rect.width / 2 - x), // over
+    );
+    if (score <= bestScore) {
+      best = id;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/* 메시지마다 저장용 이름 ("보낸이->받는이#순번"). 자기 자신에게 보내는 메시지도 이름을 붙인다. */
+export function assignMessageKeys(
+  ends: ReadonlyArray<{ from: string | null; to: string | null }>,
+): (string | null)[] {
+  const occurrences = new Map<string, number>();
+  return ends.map(({ from, to }) => {
+    if (!from || !to) return null;
+    const pair = `${from}->${to}`;
+    const n = occurrences.get(pair) ?? 0;
+    occurrences.set(pair, n + 1);
+    return edgeKey(from, to, n);
+  });
+}
+
+/*
+ * 메시지를 위아래로 옮길 수 있는 범위. 메시지 순서(=시간 순서)가 바뀌지 않도록
+ * 바로 위·아래 메시지와 gap 이상 떨어진 곳까지만 허용한다.
+ */
+export function messageRange(
+  currentY: number,
+  otherYs: readonly number[],
+  top: number,
+  bottom: number,
+  gap: number,
+): { min: number; max: number } {
+  let min = top;
+  let max = bottom;
+  for (const y of otherYs) {
+    if (y <= currentY) min = Math.max(min, y + gap);
+    else max = Math.min(max, y - gap);
+  }
+  return { min, max: Math.max(min, max) };
+}
+
+export function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/* y 위치에 놓으면 몇 번째 자리가 되는지 = 나머지 메시지 중 y보다 위에 있는 개수 (otherYs는 위에서 아래 순서) */
+export function insertionIndex(y: number, otherYs: readonly number[]): number {
+  return otherYs.filter((other) => other < y).length;
+}

@@ -1,5 +1,5 @@
 import type { NodeLayout, Point } from '../core/DiagramModel';
-import type { OverlayLayer } from './OverlayLayer';
+import type { OverlayCallbacks, OverlayLayer } from './OverlayLayer';
 import {
   type SizedLayout,
   assignEdgeKeys,
@@ -31,6 +31,9 @@ const EDGE_SNAP_DISTANCE = 30;
 /* 화살촉 자리로 볼 수 있는 최대 거리 (Mermaid 화살촉은 20px 이내) */
 const MAX_ARROW_GAP = 30;
 const ACCENT = '#1a73e8';
+/* 다시 연결할 대상 노드 강조색 */
+const RECONNECT_COLOR = '#1e8e3e';
+const ENDPOINT_SIZE = 8;
 
 interface TextGroup {
   el: SVGGElement;
@@ -83,20 +86,10 @@ interface EdgeInfo {
 
 type Selection = { kind: 'node'; id: string } | { kind: 'edge'; key: string } | null;
 
-/*
- * 오버레이 → 모델 연결 (UniDia 가이드 "core 사용 규칙 1"):
- * 드래그 중에는 preview로 모델에 미리보기만 반영하고, 드래그가 끝나면 commit으로 한 번만 기록한다.
- * commit의 prev는 드래그를 시작하기 전 모델 값이다 (처음 편집이면 undefined).
- */
-export interface ClassDiagramOverlayOptions {
-  /* 노드 드래그·크기 조절 중 매 프레임. 취소되면 시작 전 값(undefined일 수 있음)으로 다시 부른다. */
-  onLayoutPreview(nodeId: string, layout: NodeLayout | undefined): void;
-  /* 노드 드래그·크기 조절을 마쳤을 때. MoveNodeCommand(..., { prev })로 기록한다. */
-  onLayoutCommit(nodeId: string, layout: SizedLayout, prev: NodeLayout | undefined): void;
-  /* 꺾임점을 끄는 중 매 프레임. 취소되면 시작 전 값으로 다시 부른다. */
-  onEdgePathPreview(edgeKey: string, waypoints: Point[] | undefined): void;
-  /* 꺾임점을 추가·이동·삭제했을 때 (모두 지우면 undefined). SetEdgePathCommand(..., { prev })로 기록한다. */
-  onEdgePathCommit(edgeKey: string, waypoints: Point[] | undefined, prev: Point[] | undefined): void;
+/* 콜백 설명은 OverlayLayer.ts의 OverlayCallbacks 참고 */
+export interface ClassDiagramOverlayOptions extends OverlayCallbacks {
+  /* 선의 시작/끝을 다른 노드에 놓았을 때. 코드의 관계 줄을 바꾸는 일은 호출한 쪽에서 한다. */
+  onEdgeReconnect(edgeKey: string, end: 'start' | 'end', nodeId: string): void;
 }
 
 /*
@@ -105,6 +98,7 @@ export interface ClassDiagramOverlayOptions {
  * - REQ-02: 노드를 끌면 이동, 선택 후 오른쪽 아래 핸들로 크기 조절
  * - REQ-04: 옮긴 노드에 연결된 선은 끝점이 항상 노드 테두리에 붙도록 다시 그린다
  * - REQ-05: 선을 끌면 꺾임점이 생기고, 꺾임점을 끌어 이동, 더블클릭해 삭제 (선 더블클릭으로도 추가)
+ * - 선을 선택하면 양 끝에 □ 핸들이 생기고, 끌어서 다른 노드에 놓으면 연결 대상이 바뀐다 (코드도 바뀜)
  * 결과는 콜백으로 넘기고, 모델은 코드와 별도로 저장한다 (REQ-03).
  */
 export class ClassDiagramOverlay implements OverlayLayer {
@@ -116,6 +110,10 @@ export class ClassDiagramOverlay implements OverlayLayer {
   private selectionBox: SVGRectElement | null = null;
   private handle: SVGRectElement | null = null;
   private waypointGroup: SVGGElement | null = null;
+  /* 선택한 선 양 끝의 다시 연결 핸들 */
+  private endpointGroup: SVGGElement | null = null;
+  /* 다시 연결 중에 그리는 점선과 대상 노드 강조 */
+  private reconnectGroup: SVGGElement | null = null;
   private hitGroup: SVGGElement | null = null;
   /* 다시 그려져도 선택을 유지하기 위해 detach 때 지우지 않는다 */
   private selection: Selection = null;
@@ -193,6 +191,7 @@ export class ClassDiagramOverlay implements OverlayLayer {
     this.overlayGroup?.remove();
     this.hitGroup?.remove();
     this.overlayGroup = this.selectionBox = this.handle = this.waypointGroup = this.hitGroup = null;
+    this.endpointGroup = this.reconnectGroup = null;
     this.svg = this.root = null;
     this.nodes.clear();
     this.edges = [];
@@ -374,12 +373,20 @@ export class ClassDiagramOverlay implements OverlayLayer {
     const waypoints = document.createElementNS(SVG_NS, 'g');
     waypoints.classList.add('unidia-waypoints');
 
-    group.append(box, handle, waypoints);
+    const endpoints = document.createElementNS(SVG_NS, 'g');
+    endpoints.classList.add('unidia-endpoints');
+    const reconnect = document.createElementNS(SVG_NS, 'g');
+    reconnect.classList.add('unidia-reconnect');
+    reconnect.setAttribute('pointer-events', 'none');
+
+    group.append(box, handle, waypoints, endpoints, reconnect);
     root.appendChild(group);
     this.overlayGroup = group;
     this.selectionBox = box;
     this.handle = handle;
     this.waypointGroup = waypoints;
+    this.endpointGroup = endpoints;
+    this.reconnectGroup = reconnect;
   }
 
   // ── 그리기 ────────────────────────────────────────────────
@@ -514,6 +521,39 @@ export class ClassDiagramOverlay implements OverlayLayer {
       circle.setAttribute('vector-effect', 'non-scaling-stroke');
       this.waypointGroup!.appendChild(circle);
     });
+
+    /* 선 양 끝의 □ 핸들: 끌어서 다른 노드에 놓으면 연결 대상이 바뀐다 */
+    this.endpointGroup?.replaceChildren();
+    const ends = edge ? this.edgeEnds(edge) : null;
+    if (ends) {
+      (['start', 'end'] as const).forEach((end, i) => {
+        const point = ends[i];
+        const square = document.createElementNS(SVG_NS, 'rect');
+        square.classList.add('unidia-endpoint');
+        square.dataset.unidiaEndpoint = end;
+        square.setAttribute('x', String(point.x - ENDPOINT_SIZE / 2));
+        square.setAttribute('y', String(point.y - ENDPOINT_SIZE / 2));
+        square.setAttribute('width', String(ENDPOINT_SIZE));
+        square.setAttribute('height', String(ENDPOINT_SIZE));
+        square.setAttribute('fill', ACCENT);
+        square.setAttribute('stroke', '#fff');
+        square.setAttribute('stroke-width', '1');
+        square.setAttribute('vector-effect', 'non-scaling-stroke');
+        this.endpointGroup!.appendChild(square);
+      });
+    }
+  }
+
+  /* 선의 양 끝(화살촉 끝) 위치. 다시 그린 선은 계산한 경로의 끝, Mermaid가 그린 선은 원래 끝점. */
+  private edgeEnds(edge: EdgeInfo): [Point, Point] | null {
+    const from = edge.from ? this.nodes.get(edge.from) : undefined;
+    const to = edge.to ? this.nodes.get(edge.to) : undefined;
+    if (!edge.key || !from || !to || from === to) return null;
+    if (from.custom || to.custom || edge.waypoints.length > 0) {
+      const route = this.currentRoute(edge)!;
+      return [route[0], route[route.length - 1]];
+    }
+    return [edge.start, edge.end];
   }
 
   /* 옮긴 노드·꺾은 선이 잘리지 않도록 보이는 영역(viewBox)을 다이어그램 전체에 맞춘다. */
@@ -547,8 +587,14 @@ export class ClassDiagramOverlay implements OverlayLayer {
     if (e.button !== 0 || !this.svg) return;
     const target = e.target as Element;
 
-    const waypointEl = target.closest<SVGElement>('[data-unidia-waypoint]');
+    const endpointEl = target.closest<SVGElement>('[data-unidia-endpoint]');
     const edge = this.selectedEdge();
+    if (endpointEl && edge) {
+      this.dragEndpoint(e, edge, endpointEl.dataset.unidiaEndpoint === 'start' ? 'start' : 'end');
+      return;
+    }
+
+    const waypointEl = target.closest<SVGElement>('[data-unidia-waypoint]');
     if (waypointEl && edge) {
       this.dragWaypoint(e, edge, Number(waypointEl.dataset.unidiaWaypoint));
       return;
@@ -745,6 +791,82 @@ export class ClassDiagramOverlay implements OverlayLayer {
   private savedPath(key: string): Point[] | undefined {
     const points = this.savedPaths[key];
     return points ? copyPoints(points) : undefined;
+  }
+
+  /*
+   * 선 끝 □ 핸들을 끌어 다른 노드에 놓으면 연결 대상을 바꾼다.
+   * 끄는 동안은 반대쪽 끝에서 마우스까지 점선을 그리고, 마우스 아래 노드를 초록 테두리로 강조한다.
+   * 빈 곳이나 원래 노드에 놓으면 아무것도 바꾸지 않는다.
+   */
+  private dragEndpoint(e: PointerEvent, edge: EdgeInfo, end: 'start' | 'end'): void {
+    const ends = this.edgeEnds(edge);
+    if (!edge.key || !ends) return;
+    const key = edge.key;
+    const [startPoint, endPoint] = ends;
+    const fixed = end === 'start' ? endPoint : startPoint;
+    const grabbed = end === 'start' ? startPoint : endPoint;
+    const currentNode = end === 'start' ? edge.from : edge.to;
+    let target: string | null = null;
+
+    this.trackPointer(e, {
+      move: (dx, dy) => {
+        const cursor = { x: grabbed.x + dx, y: grabbed.y + dy };
+        const hovered = this.nodeAt(cursor);
+        target = hovered !== currentNode ? hovered : null;
+        this.drawReconnect(fixed, cursor, target);
+      },
+      commit: () => {
+        this.reconnectGroup?.replaceChildren();
+        if (target) this.options.onEdgeReconnect(key, end, target);
+      },
+      cancel: () => this.reconnectGroup?.replaceChildren(),
+    });
+  }
+
+  /* 그 점 위에 있는 노드 (겹치면 나중에 그려진 것) */
+  private nodeAt(point: Point): string | null {
+    let found: string | null = null;
+    for (const node of this.nodes.values()) {
+      const rect = layoutRect(node.current);
+      const inside =
+        point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+      if (inside) found = node.id;
+    }
+    return found;
+  }
+
+  private drawReconnect(from: Point, cursor: Point, target: string | null): void {
+    const group = this.reconnectGroup;
+    if (!group) return;
+    group.replaceChildren();
+
+    const line = document.createElementNS(SVG_NS, 'line');
+    line.setAttribute('x1', String(from.x));
+    line.setAttribute('y1', String(from.y));
+    line.setAttribute('x2', String(cursor.x));
+    line.setAttribute('y2', String(cursor.y));
+    line.setAttribute('stroke', ACCENT);
+    line.setAttribute('stroke-width', '1.5');
+    line.setAttribute('stroke-dasharray', '5 4');
+    line.setAttribute('vector-effect', 'non-scaling-stroke');
+    group.appendChild(line);
+
+    const node = target ? this.nodes.get(target) : undefined;
+    if (node) {
+      const rect = layoutRect(node.current);
+      const margin = 4;
+      const highlight = document.createElementNS(SVG_NS, 'rect');
+      highlight.setAttribute('x', String(rect.x - margin));
+      highlight.setAttribute('y', String(rect.y - margin));
+      highlight.setAttribute('width', String(rect.width + margin * 2));
+      highlight.setAttribute('height', String(rect.height + margin * 2));
+      highlight.setAttribute('fill', 'none');
+      highlight.setAttribute('stroke', RECONNECT_COLOR);
+      highlight.setAttribute('stroke-width', '2');
+      highlight.setAttribute('stroke-dasharray', '4 3');
+      highlight.setAttribute('vector-effect', 'non-scaling-stroke');
+      group.appendChild(highlight);
+    }
   }
 
   private rerouteEdgesOf(id: string): void {

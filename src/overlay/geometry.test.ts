@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   assignEdgeKeys,
+  assignMessageKeys,
+  clamp,
   contentShift,
   decodeEdgePoints,
   distanceToRect,
@@ -8,6 +10,10 @@ import {
   distanceToSegment,
   edgeKey,
   findAttachedNode,
+  insertionIndex,
+  messageRange,
+  nearestById,
+  noteOwner,
   parseClassNodeId,
   parseTranslate,
   pointAtHalfLength,
@@ -175,5 +181,51 @@ describe('크기 조절 시 글자 위치', () => {
   it('늘어난 폭·높이의 절반만큼 옮기면 글자가 왼쪽 위 기준 자리에 남는다', () => {
     expect(contentShift({ width: 100, height: 60 }, { width: 160, height: 100 })).toEqual({ x: 30, y: 20 });
     expect(contentShift({ width: 100, height: 60 }, { width: 100, height: 60 })).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe('시퀀스 다이어그램', () => {
+  const lifelines = [
+    { id: 'Alice', x: 75 },
+    { id: 'Bob', x: 275 },
+    { id: 'Carol', x: 475 },
+  ];
+
+  it('메시지 끝 x에서 가장 가까운 생명선을 찾는다', () => {
+    const items = lifelines.map(({ id, x }) => ({ id, value: x }));
+    expect(nearestById(76, items, 30)).toBe('Alice'); // Mermaid는 생명선에서 1px 떨어져 시작
+    expect(nearestById(271, items, 30)).toBe('Bob'); // 화살촉 자리만큼 4px 앞에서 끝남
+    expect(nearestById(175, items, 30)).toBeNull();
+  });
+
+  it('노트 위치로 주인 참여자를 찾는다 (right of / left of / over)', () => {
+    expect(noteOwner({ x: 500, y: 0, width: 150, height: 40 }, lifelines)).toBe('Carol'); // right of Carol
+    expect(noteOwner({ x: 150, y: 0, width: 100, height: 40 }, lifelines)).toBe('Bob'); // left of Bob
+    expect(noteOwner({ x: 0, y: 0, width: 150, height: 40 }, lifelines)).toBe('Alice'); // over Alice
+  });
+
+  it('메시지 이름은 보낸이->받는이#순번, 자기 자신에게 보내는 메시지도 포함', () => {
+    expect(
+      assignMessageKeys([
+        { from: 'Alice', to: 'Bob' },
+        { from: 'Bob', to: 'Alice' },
+        { from: 'Alice', to: 'Bob' },
+        { from: 'Carol', to: 'Carol' },
+        { from: null, to: 'Bob' },
+      ]),
+    ).toEqual(['Alice->Bob#0', 'Bob->Alice#0', 'Alice->Bob#1', 'Carol->Carol#0', null]);
+  });
+
+  it('메시지는 위·아래 메시지 사이에서만 움직인다 (순서 유지)', () => {
+    expect(messageRange(173, [121, 229, 420], 80, 440, 12)).toEqual({ min: 133, max: 217 });
+    expect(messageRange(121, [173, 229], 80, 440, 12)).toEqual({ min: 80, max: 161 }); // 첫 메시지
+    expect(clamp(300, 133, 217)).toBe(217);
+  });
+
+  it('놓은 위치로 새 순서를 구한다 (위에 있는 메시지 개수)', () => {
+    const others = [121, 229, 420]; // 나를 뺀 메시지들
+    expect(insertionIndex(100, others)).toBe(0); // 맨 앞으로
+    expect(insertionIndex(180, others)).toBe(1); // 첫 번째 다음
+    expect(insertionIndex(500, others)).toBe(3); // 맨 뒤로
   });
 });

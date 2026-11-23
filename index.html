@@ -25,6 +25,10 @@
       /* 엣지 경로 조정 (REQ-05) */
       svg.unidia-editable .unidia-edge-hit { cursor: pointer; }
       svg.unidia-editable .unidia-waypoint { cursor: move; }
+      svg.unidia-editable .unidia-endpoint { cursor: crosshair; }
+      /* 시퀀스 다이어그램: 참여자 좌우 이동, 메시지 위아래 이동 */
+      svg.unidia-editable [data-unidia-participant] { cursor: ew-resize; }
+      svg.unidia-editable .unidia-message-hit { cursor: ns-resize; }
     </style>
   </head>
   <body>

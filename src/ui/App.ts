@@ -8,12 +8,17 @@ import {
 import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
 import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
+import type { OverlayCallbacks } from '../overlay/OverlayLayer';
+import { SequenceDiagramOverlay } from '../overlay/SequenceDiagramOverlay';
+import { moveMessage, reconnectMessage } from '../overlay/sequenceCode';
 import { makeBenchmarkCode, runOverlayBenchmark, waitFor } from '../overlay/benchmark';
 import type { DiagramType } from '../render/diagramTypes';
 import { RenderEngine, type RenderResult } from '../render/RenderEngine';
 import { RenderScheduler } from '../render/RenderScheduler';
 import { SvgViewport } from '../render/SvgViewport';
 import { serializeDiagram } from '../render/serializeDiagram';
+import { parseEdgeKey, reconnectEdge } from '../overlay/reconnect';
+import { BatchCommand } from './BatchCommand';
 
 const SAMPLE_CODE = `classDiagram
   class Animal {
@@ -33,8 +38,8 @@ const HISTORY_DEBOUNCE_MS = 400;
 const BENCHMARK_MODE = new URLSearchParams(location.search).has('bench');
 
 const HINTS: Record<DiagramType, string> = {
-  class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제',
-  sequence: '시퀀스 다이어그램은 아직 GUI 편집을 지원하지 않습니다',
+  class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제 · 선 끝 ■ 드래그: 다시 연결',
+  sequence: '참여자 드래그: 좌우 이동 · 메시지 드래그: 간격 조정, 다른 메시지를 넘어가면 순서 변경 · 메시지 끝 ■ 드래그: 보낸이·받는이 변경',
 };
 
 /** UI 계층: 코드 에디터와 캔버스를 항상 함께 표시한다 (REQ-10). */
@@ -47,14 +52,24 @@ export class App {
    * 드래그 중에는 setNodeLayout/setEdgePath로 모델에 미리보기만 반영하고,
    * 드래그가 끝나면 시작 전 값을 { prev }로 넘겨 히스토리에 한 번만 기록한다.
    */
-  private overlay = new ClassDiagramOverlay({
+  private overlayCallbacks: OverlayCallbacks = {
     onLayoutPreview: (nodeId, layout) => this.preview(() => this.model.setNodeLayout(nodeId, layout)),
     onLayoutCommit: (nodeId, layout, prev) =>
       this.commitOverlayEdit(new MoveNodeCommand(this.model, nodeId, layout, { prev })),
-    onEdgePathPreview: (edgeKey, waypoints) =>
-      this.preview(() => this.model.setEdgePath(edgeKey, waypoints)),
-    onEdgePathCommit: (edgeKey, waypoints, prev) =>
-      this.commitOverlayEdit(new SetEdgePathCommand(this.model, edgeKey, waypoints, { prev })),
+    onEdgePathPreview: (edgeKey, points) => this.preview(() => this.model.setEdgePath(edgeKey, points)),
+    onEdgePathCommit: (edgeKey, points, prev) =>
+      this.commitOverlayEdit(new SetEdgePathCommand(this.model, edgeKey, points, { prev })),
+  };
+  /** 클래스 다이어그램 오버레이 (REQ-02·04·05, 엣지 다시 연결) */
+  private overlay = new ClassDiagramOverlay({
+    ...this.overlayCallbacks,
+    onEdgeReconnect: (edgeKey, end, nodeId) => this.reconnectEdge(edgeKey, end, nodeId),
+  });
+  /** 시퀀스 다이어그램 오버레이 (참여자 좌우 이동, 메시지 간격 조정·순서 변경) */
+  private sequenceOverlay = new SequenceDiagramOverlay({
+    ...this.overlayCallbacks,
+    onMessageReorder: (from, to, key) => this.reorderMessage(from, to, key),
+    onMessageReconnect: (index, end, participant, key) => this.reconnectMessage(index, end, participant, key),
   });
   /** 드래그 미리보기 중에는 오버레이가 이미 화면을 그렸으므로 다시 그리지 않는다. */
   private previewing = false;
@@ -211,7 +226,7 @@ export class App {
     this.requestedCode = source;
     ++this.renderToken;
     // 새 코드가 준비될 때까지 이전 노드에 대한 편집을 받지 않는다.
-    this.overlay.detach();
+    this.detachOverlays();
     this.canvas.setAttribute('aria-busy', 'true');
     this.status.dataset.state = 'pending';
     delete this.status.dataset.renderMs;
@@ -238,18 +253,22 @@ export class App {
 
   /** 마지막으로 렌더링한 SVG를 캔버스에 놓고, 저장된 노드 위치·크기를 오버레이로 적용한다. */
   private showDiagram(): void {
-    this.overlay.detach();
+    this.detachOverlays();
     this.viewport.detach();
     if (!this.lastSvg) return;
     this.canvas.innerHTML = this.lastSvg;
     this.hint.textContent = this.lastType ? HINTS[this.lastType] : '';
     const svg = this.canvas.querySelector('svg');
-    if (svg && this.lastType === 'class') {
-      const { nodeLayouts, edgePaths } = this.model.getState();
-      this.overlay.attach(svg, nodeLayouts, edgePaths);
-    }
-    // 오버레이가 viewBox를 맞춘 다음 배율을 적용해야 이동·리사이즈 후에도 배율이 유지된다.
-    if (svg) this.viewport.attach(svg);
+    if (!svg || !this.lastType) return;
+    const { nodeLayouts, edgePaths } = this.model.getState();
+    const overlay = this.lastType === 'class' ? this.overlay : this.sequenceOverlay;
+    overlay.attach(svg, nodeLayouts, edgePaths);
+    this.viewport.attach(svg);
+  }
+
+  private detachOverlays(): void {
+    this.overlay.detach();
+    this.sequenceOverlay.detach();
   }
 
   private preview(apply: () => void): void {
@@ -259,6 +278,59 @@ export class App {
     } finally {
       this.previewing = false;
     }
+  }
+
+  /**
+   * 선의 시작/끝을 다른 노드로 다시 연결: Mermaid 코드의 관계 줄에서 클래스 이름을 바꾸고
+   * SetCodeCommand로 기록한다 (Ctrl+Z로 되돌릴 수 있음).
+   */
+  private reconnectEdge(edgeKey: string, end: 'start' | 'end', nodeId: string): void {
+    this.flushPendingInput();
+    const prev = this.model.getState().code;
+    const ref = parseEdgeKey(edgeKey);
+    const next = ref ? reconnectEdge(prev, ref, end, nodeId) : null;
+    if (!next || next === prev) {
+      this.status.textContent = '코드에서 이 연결선의 관계 줄을 찾지 못했습니다';
+      return;
+    }
+    this.history.execute(new SetCodeCommand(this.model, prev, next));
+    this.updateButtons();
+  }
+
+  /** 시퀀스 메시지 순서 변경: 코드의 메시지 줄을 옮긴다. */
+  private reorderMessage(from: number, to: number, key: string | null): void {
+    this.flushPendingInput();
+    const code = this.model.getState().code;
+    this.applySequenceCodeEdit(moveMessage(code, from, to), key, '코드에서 메시지 줄을 찾지 못해 순서를 바꾸지 못했습니다');
+  }
+
+  /** 시퀀스 메시지 보낸이·받는이 변경: 코드의 메시지 줄에서 참여자 이름을 바꾼다. */
+  private reconnectMessage(index: number, end: 'start' | 'end', participant: string, key: string | null): void {
+    this.flushPendingInput();
+    const code = this.model.getState().code;
+    this.applySequenceCodeEdit(
+      reconnectMessage(code, index, end, participant),
+      key,
+      '코드에서 메시지 줄을 찾지 못해 보낸이·받는이를 바꾸지 못했습니다',
+    );
+  }
+
+  /**
+   * 시퀀스 메시지를 코드에서 바꾼 결과를 기록한다. 그 메시지에 저장된 간격 조정은 새 자리에서 의미가 없으므로
+   * 함께 지우고, 둘을 묶어 실행 취소 한 번에 되돌린다.
+   */
+  private applySequenceCodeEdit(next: string | null, key: string | null, failMessage: string): void {
+    const prev = this.model.getState().code;
+    if (!next || next === prev) {
+      this.status.textContent = failMessage;
+      return;
+    }
+    const commands: Command[] = [new SetCodeCommand(this.model, prev, next)];
+    if (key && this.model.getState().edgePaths[key]) {
+      commands.push(new SetEdgePathCommand(this.model, key, undefined));
+    }
+    this.history.execute(commands.length === 1 ? commands[0] : new BatchCommand(commands));
+    this.updateButtons();
   }
 
   private commitOverlayEdit(command: Command): void {
@@ -300,7 +372,7 @@ export class App {
   }
 
   private showError(message: string): void {
-    this.overlay.detach();
+    this.detachOverlays();
     this.viewport.detach();
     this.lastSvg = '';
     this.lastType = null;
