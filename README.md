@@ -5,7 +5,7 @@
 
 소프트웨어공학 수업 팀 프로젝트(5인)로 진행 중인 가칭 **UniDia**의 요구사항·설계 문서와 구현 코드를 함께 관리하는 저장소입니다.
 
-> **현재 단계: 구현 · 통합 (2026-11-24 기준)** — 코어(#4), 오버레이(#5), 렌더링(#7), 내보내기(#3)가 `main`에 합쳐졌고 기능 동결(11/27)을 앞두고 있습니다. 저장·불러오기 버튼(REQ-12)은 아직 화면에 연결되지 않았습니다. 상세 현황과 실행 방법은 [docs/development.md](docs/development.md)를 보세요. 수치와 범위는 팀 회의에서 확정되었지만 이후 변경될 수 있습니다.
+> **현재 단계: 구현 · 통합 (2026-11-24 기준)** — 코어(#4), 오버레이(#5), 렌더링(#7), 내보내기(#3)가 `main`에 합쳐졌고 기능 동결(11/27)을 앞두고 있습니다. 저장·불러오기 버튼(REQ-12)은 UI 연결 예정입니다.. 상세 현황과 실행 방법은 [docs/development.md](docs/development.md)를 보세요. 수치와 범위는 팀 회의에서 확정되었지만 이후 변경될 수 있습니다.
 
 ## 왜 UniDia인가
 
@@ -144,6 +144,7 @@ npm run dev         # 개발 서버
 | [docs/rendering.md](docs/rendering.md) | 렌더링·배율·스케줄러 |
 | [docs/export.md](docs/export.md) | PNG/JPG·Mermaid 내보내기와 흑백 인쇄용 4색 팔레트 |
 | [docs/open-issues.md](docs/open-issues.md) | 문서 정합성 점검 결과와 UI 설계 원칙 |
+| [docs/test-plan.md](docs/test-plan.md) | 요구사항별 테스트 계획 |
 
 ## 라이선스
 
