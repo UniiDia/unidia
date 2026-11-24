@@ -19,6 +19,15 @@ import { SvgViewport } from '../render/SvgViewport';
 import { serializeDiagram } from '../render/serializeDiagram';
 import { parseEdgeKey, reconnectEdge } from '../overlay/reconnect';
 import { BatchCommand } from './BatchCommand';
+import {
+  checkDiagramFileSize,
+  DIAGRAM_FILE_ACCEPT,
+  DIAGRAM_FILE_MIME,
+  DIAGRAM_FILE_NAME,
+  diagramFileContent,
+  loadDiagramFile,
+} from './diagramFile';
+import { resolveShortcut, type ShortcutAction } from './shortcuts';
 
 const SAMPLE_CODE = `classDiagram
   class Animal {
@@ -85,6 +94,7 @@ export class App {
   private hint!: HTMLSpanElement;
   private undoButton!: HTMLButtonElement;
   private redoButton!: HTMLButtonElement;
+  private fileInput!: HTMLInputElement;
 
   private committedCode = SAMPLE_CODE;
   private lastSvg = '';
@@ -101,6 +111,9 @@ export class App {
       <div class="toolbar">
         <button data-action="undo">실행 취소 (Ctrl+Z)</button>
         <button data-action="redo">다시 실행 (Ctrl+Y)</button>
+        <button data-action="save">저장 (Ctrl+S)</button>
+        <button data-action="open">불러오기 (Ctrl+O)</button>
+        <input type="file" data-role="open-file" accept="${DIAGRAM_FILE_ACCEPT}" hidden>
         <button data-action="export-mermaid">Mermaid 코드 내보내기</button>
         <button data-action="export-png">PNG 내보내기</button>
         <button data-action="export-jpg">JPG 내보내기</button>
@@ -131,6 +144,7 @@ export class App {
     this.hint = this.root.querySelector('.hint')!;
     this.undoButton = this.root.querySelector('[data-action="undo"]')!;
     this.redoButton = this.root.querySelector('[data-action="redo"]')!;
+    this.fileInput = this.root.querySelector('[data-role="open-file"]')!;
 
     this.textarea.value = this.model.getState().code;
 
@@ -154,16 +168,11 @@ export class App {
     });
 
     this.textarea.addEventListener('input', () => this.onCodeInput());
-    this.undoButton.addEventListener('click', () => {
-      this.flushPendingInput();
-      this.history.undo();
-      this.updateButtons();
-    });
-    this.redoButton.addEventListener('click', () => {
-      this.flushPendingInput();
-      this.history.redo();
-      this.updateButtons();
-    });
+    this.undoButton.addEventListener('click', () => this.runAction('undo'));
+    this.redoButton.addEventListener('click', () => this.runAction('redo'));
+    this.root.querySelector('[data-action="save"]')!.addEventListener('click', () => this.runAction('save'));
+    this.root.querySelector('[data-action="open"]')!.addEventListener('click', () => this.runAction('open'));
+    this.fileInput.addEventListener('change', () => void this.onFileChosen());
     this.root
       .querySelector('[data-action="export-mermaid"]')!
       .addEventListener('click', () => void this.exportAs('mermaid'));
@@ -200,20 +209,78 @@ export class App {
     }, HISTORY_DEBOUNCE_MS);
   }
 
+  /** 단축키 → 동작 (매핑 규칙과 테스트는 shortcuts.ts). */
   private onKeyDown(e: KeyboardEvent): void {
-    if (!(e.ctrlKey || e.metaKey)) return;
-    const key = e.key.toLowerCase();
-    if (key === 'z' && !e.shiftKey) {
-      e.preventDefault();
-      this.flushPendingInput();
-      this.history.undo();
-      this.updateButtons();
-    } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
-      e.preventDefault();
-      this.flushPendingInput();
-      this.history.redo();
-      this.updateButtons();
+    const action = resolveShortcut(e);
+    if (!action) return;
+    // Ctrl+S(페이지 저장), Ctrl+O(파일 열기) 같은 브라우저 기본 동작을 막는다.
+    e.preventDefault();
+    this.runAction(action);
+  }
+
+  /** 버튼과 단축키가 같은 경로로 실행되게 한다. */
+  private runAction(action: ShortcutAction): void {
+    switch (action) {
+      case 'undo':
+        this.flushPendingInput();
+        this.history.undo();
+        this.updateButtons();
+        break;
+      case 'redo':
+        this.flushPendingInput();
+        this.history.redo();
+        this.updateButtons();
+        break;
+      case 'save':
+        this.saveDiagram();
+        break;
+      case 'open':
+        // 같은 파일을 다시 골라도 change 이벤트가 오도록 값을 비운다.
+        this.fileInput.value = '';
+        this.fileInput.click();
+        break;
     }
+  }
+
+  /** 저장 (REQ-12): 코드와 GUI 편집 정보를 JSON 파일로 내려받는다. */
+  private saveDiagram(): void {
+    this.flushPendingInput();
+    const blob = new Blob([diagramFileContent(this.model)], { type: DIAGRAM_FILE_MIME });
+    this.download(blob, DIAGRAM_FILE_NAME);
+    this.status.textContent = `저장했습니다 (${DIAGRAM_FILE_NAME})`;
+  }
+
+  /** 불러오기 (REQ-12): 고른 파일을 읽어 model.load(json) 후 history.clear(). */
+  private async onFileChosen(): Promise<void> {
+    const file = this.fileInput.files?.[0];
+    if (!file) return;
+    const sizeError = checkDiagramFileSize(file.size);
+    if (sizeError) {
+      this.status.textContent = sizeError;
+      return;
+    }
+    let json: string;
+    try {
+      json = await file.text();
+    } catch {
+      this.status.textContent = '파일을 읽지 못했습니다.';
+      return;
+    }
+    // 아직 기록되지 않은 입력은 버린다: 불러온 내용이 현재 작업을 대신한다.
+    window.clearTimeout(this.historyTimer);
+    // 성공하면 model.load가 구독자에게 알리고, 구독이 에디터 내용·committedCode·렌더링을 갱신한다.
+    const result = loadDiagramFile(this.model, this.history, json);
+    this.updateButtons();
+    this.status.textContent = result.ok ? `불러왔습니다 (${file.name})` : result.message;
+  }
+
+  private download(blob: Blob, fileName: string): void {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   /** 아직 기록되지 않은 입력이 있으면 먼저 기록해서 Undo가 그 입력부터 되돌리게 한다. */
@@ -416,12 +483,7 @@ export class App {
         svg: svg ? serializeDiagram(svg) : '',
         code: this.model.getState().code,
       });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `diagram.${strategy.extension}`;
-      a.click();
-      URL.revokeObjectURL(url);
+      this.download(blob, `diagram.${strategy.extension}`);
     } catch (error) {
       this.status.textContent = error instanceof Error ? error.message : String(error);
     }
