@@ -1,5 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { ExportSizeError, computeExportSize } from './ExportStrategy';
+import { ExportSizeError, MermaidCodeExport, RasterImageExport, computeExportSize } from './ExportStrategy';
+
+describe('MermaidCodeExport (.mmd)', () => {
+  it('작성한 코드를 그대로 내보낸다 (팔레트 주석·classDef·색 변환 없음)', async () => {
+    const code = 'classDiagram\n  class Dog\n  style Dog fill:#4a148c\n';
+    const blob = await new MermaidCodeExport().export({ svg: '<svg></svg>', code, colorMode: 'grayscale' });
+    expect(await blob.text()).toBe(code);
+  });
+});
+
+describe('RasterImageExport', () => {
+  it('다이어그램이 없으면 색상 선택 창을 띄우기 전에 오류를 낸다', async () => {
+    await expect(new RasterImageExport('png', 'png', 'image/png').export({ svg: ' ', code: '' })).rejects.toThrow(
+      '내보낼 다이어그램이 없습니다',
+    );
+  });
+});
 
 /** REQ-08 기준(잠정): 이미지 폭 2000px 이상 */
 const MIN_WIDTH = 2000;

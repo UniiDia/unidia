@@ -4,8 +4,8 @@
  * 확인 기준(잠정): Rec.709 휘도로 그레이스케일 변환 후, 4색 중 어느 두 색을 골라도 명도(L*) 차이 20 이상.
  * 흑백 인쇄에서는 색상(hue) 정보가 사라지므로 명도가 일정 간격으로 떨어진 색을 토큰으로 정의한다.
  *
- * - 화면 렌더링: 테마 색과 classDef(c1~c4)로 팔레트를 사용한다 (사용자 지정 색은 그대로 보여준다).
- * - 내보내기: 사용자가 직접 지정한 색(style/classDef/rect/box)을 가장 가까운 토큰 색으로 바꾼다.
+ * PNG/JPG를 "흑백 인쇄용"으로 내보낼 때만 상자 색을 가장 가까운 토큰 색으로 바꾼다 (svgPalette.ts).
+ * 화면과 .mmd 코드는 바꾸지 않는다.
  */
 
 export type PaletteTokenId = 'c1' | 'c2' | 'c3' | 'c4';
@@ -189,12 +189,7 @@ export function nearestToken(color: string, options: NearestOptions = {}): Palet
   return best;
 }
 
-function toRgbFunction(hex: string): string {
-  const { r, g, b } = parseColor(hex)!;
-  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
-}
-
-// ─── Mermaid 코드 변환 ─────────────────────────────────────────────────────
+// ─── Mermaid 코드 읽기 ─────────────────────────────────────────────────────
 
 /** 색 이름(red 등)처럼 parseColor가 못 읽는 색을 #rrggbb로 바꿔 주는 함수 */
 export type ColorResolver = (color: string) => string | null;
@@ -224,35 +219,6 @@ function isClassDiagram(lines: string[]): boolean {
 
 function isSequenceDiagram(lines: string[]): boolean {
   return headerLine(lines)?.startsWith('sequenceDiagram') ?? false;
-}
-
-/** 사용자가 이미 정의한 classDef 이름 */
-function definedClassNames(lines: string[]): Set<string> {
-  const names = new Set<string>();
-  for (const line of lines) {
-    const m = /^\s*classDef\s+(\S+)/.exec(line);
-    if (m) m[1].split(',').forEach((n) => names.add(n));
-  }
-  return names;
-}
-
-/**
- * 클래스 다이어그램 코드 끝에 팔레트 classDef(c1~c4)를 붙인다.
- * 사용자는 `class A:::c3` 처럼 토큰을 쓸 수 있다.
- * - 같은 이름의 classDef가 이미 있으면 사용자 정의를 존중해 그 토큰은 붙이지 않는다.
- * - 시퀀스 다이어그램은 classDef 문법이 없으므로 그대로 둔다.
- * - 끝에 붙이는 이유: Mermaid는 classDef 시점에 이미 존재하는 클래스에만 인라인 스타일을 넣는다.
- */
-export function injectPaletteClassDefs(code: string): string {
-  const lines = code.split('\n');
-  if (!isClassDiagram(lines)) return code;
-  const defined = definedClassNames(lines);
-  const missing = PALETTE.filter((t) => !defined.has(t.id)).map(
-    (t) => `  classDef ${t.id} fill:${t.fill},stroke:${INK},color:${t.text}`,
-  );
-  if (missing.length === 0) return code;
-  const base = code.replace(/\s+$/, '');
-  return `${base}\n  %% UniDia 흑백 인쇄용 팔레트 (REQ-09)\n${missing.join('\n')}\n`;
 }
 
 /** 괄호 안의 쉼표(rgb(1,2,3))는 나누지 않고 쉼표로 자른다. */
@@ -287,39 +253,8 @@ function resolveToken(
   return resolved ? nearestToken(resolved, options) : null;
 }
 
-/**
- * `fill:#f00,stroke:#333,color:#fff` 형태의 스타일 목록에서 fill을 토큰 색으로 바꾸고,
- * 글자가 읽히도록 color도 토큰의 글자색으로 맞춘다. fill이 없거나 읽을 수 없으면 그대로 둔다.
- */
+/** `fill:#f00` 같은 스타일 항목 하나: [앞 공백, 이름, 콜론, 값, !important] */
 const STYLE_PROP = /^(\s*)([\w-]+)(\s*:\s*)(.+?)(\s*(?:!important)?\s*)$/i;
-
-function remapStyleProps(props: string, resolve: ColorResolver | undefined): string {
-  const trailing = /;\s*$/.test(props) ? ';' : '';
-  const items = splitStyleProps(trailing ? props.replace(/;\s*$/, '') : props);
-
-  // 1) fill → 가장 가까운 토큰
-  let token: PaletteToken | null = null;
-  for (let i = 0; i < items.length; i++) {
-    const m = STYLE_PROP.exec(items[i]);
-    if (!m || m[2].toLowerCase() !== 'fill') continue;
-    const found = resolveToken(m[4], resolve);
-    if (!found) continue;
-    token = found;
-    items[i] = `${m[1]}${m[2]}${m[3]}${found.fill}${m[5]}`;
-  }
-  if (!token) return props;
-
-  // 2) color → 토큰 글자색 (어두운 토큰에 검정 글자가 남지 않도록)
-  let hasColor = false;
-  for (let i = 0; i < items.length; i++) {
-    const m = STYLE_PROP.exec(items[i]);
-    if (!m || m[2].toLowerCase() !== 'color') continue;
-    hasColor = true;
-    items[i] = `${m[1]}${m[2]}${m[3]}${token.text}${m[5]}`;
-  }
-  if (!hasColor) items.push(`color:${token.text}`);
-  return items.join(',') + trailing;
-}
 
 // ─── 이미지(SVG) 변환용 색 대응표 ──────────────────────────────────────────
 
@@ -336,10 +271,7 @@ export function tokenById(id: string): PaletteToken | undefined {
   return PALETTE.find((t) => t.id === id);
 }
 
-/**
- * 내보내기 이미지에서 "어떤 색을 어떤 토큰으로 바꿀지" 대응표.
- * applyPaletteForExport(.mmd)와 같은 규칙(resolveToken)을 써서 .mmd와 이미지의 색이 일치한다.
- */
+/** 내보내기 이미지(흑백 인쇄용)에서 "어떤 색을 어떤 토큰으로 바꿀지" 대응표 */
 export interface ExportColorMap {
   /** 클래스: 사용자 classDef 이름 → 토큰 (나머지 노드는 현재 fill에서 가장 가까운 토큰) */
   byClass: Map<string, PaletteToken>;
@@ -382,49 +314,4 @@ export function buildExportColorMap(code: string, options: PaletteExportOptions 
 export interface PaletteExportOptions {
   /** 색 이름 해석기. 기본값은 브라우저 canvas 사용 */
   resolveColor?: ColorResolver;
-}
-
-/**
- * 내보내기용 코드: 사용자가 직접 지정한 색을 가장 가까운 토큰 색으로 바꾸고 팔레트 classDef를 붙인다.
- * 화면에는 사용자 원래 색이 보이고, 내보낸 결과물(PNG/JPG/.mmd)만 흑백 구분 기준을 만족한다.
- *
- * 변환 대상
- * - 클래스: `style <id> fill:…`, `classDef <이름> fill:…` → fill은 토큰 색, color는 토큰 글자색
- * - 시퀀스: `rect <색>`, `box <색> <제목>` → 토큰 색 (rgb() 형식, box는 hex를 받지 않음)
- *   이 배경 위의 메시지·제목 글자색은 바꿀 수 없으므로 글자색이 검정인 밝은 토큰(c1, c2)만 쓴다.
- */
-export function applyPaletteForExport(code: string, options: PaletteExportOptions = {}): string {
-  const resolve = options.resolveColor ?? browserColorResolver;
-  const lines = code.split('\n');
-
-  if (isClassDiagram(lines)) {
-    const converted = lines.map((line) => {
-      const m = /^(\s*(?:style|classDef)\s+\S+\s+)(.+)$/.exec(line);
-      if (!m || line.trim().startsWith('%%')) return line;
-      return m[1] + remapStyleProps(m[2], resolve);
-    });
-    return injectPaletteClassDefs(converted.join('\n'));
-  }
-
-  if (isSequenceDiagram(lines)) {
-    return lines
-      .map((line) => {
-        const rect = /^(\s*rect\s+)(.+?)(\s*)$/i.exec(line);
-        if (rect) {
-          const token = resolveToken(rect[2], resolve, { darkTextOnly: true });
-          return token ? `${rect[1]}${toRgbFunction(token.fill)}${rect[3]}` : line;
-        }
-        // Mermaid parseBoxData와 같은 규칙으로 앞부분의 색을 떼어 낸다.
-        const box = /^(\s*box\s+)((?:rgba?|hsla?)\s*\([^)]*\)|\w+)(.*)$/i.exec(line);
-        if (box) {
-          const token = resolveToken(box[2], resolve, { darkTextOnly: true });
-          // 색이 아닌 단어(제목의 첫 단어)면 resolveToken이 null → 그대로 둔다.
-          return token ? `${box[1]}${toRgbFunction(token.fill)}${box[3]}` : line;
-        }
-        return line;
-      })
-      .join('\n');
-  }
-
-  return code;
 }

@@ -1,5 +1,7 @@
-import { applyPaletteForExport } from './palette';
+import { ExportCancelledError, askColorMode, type ColorMode } from './colorModeDialog';
 import { applyPaletteToSvg } from './svgPalette';
+
+export { ExportCancelledError, type ColorMode };
 
 /** Strategy 패턴: 내보내기 형식별 알고리즘을 교체 가능하게 한다 (REQ-08). */
 export interface ExportInput {
@@ -7,6 +9,11 @@ export interface ExportInput {
   svg: string;
   /** 현재 Mermaid 코드 */
   code: string;
+  /**
+   * PNG/JPG 색상 (REQ-09). 'grayscale' = 흑백 인쇄용 4색, 'original' = 화면 색 그대로.
+   * 생략하면 내보낼 때 선택 창을 띄운다. .mmd에는 쓰지 않는다.
+   */
+  colorMode?: ColorMode;
 }
 
 export interface ExportStrategy {
@@ -16,17 +23,14 @@ export interface ExportStrategy {
   export(input: ExportInput): Promise<Blob>;
 }
 
-/**
- * Mermaid 코드(.mmd) 내보내기.
- * REQ-09: 사용자 지정 색을 팔레트 토큰으로 바꾸고 팔레트 classDef(c1~c4)를 포함한다.
- */
+/** Mermaid 코드(.mmd) 내보내기: 사용자가 작성한 코드를 그대로 내보낸다 (색 변환·팔레트 추가 없음). */
 export class MermaidCodeExport implements ExportStrategy {
   readonly id = 'mermaid' as const;
   readonly extension = 'mmd';
   readonly mimeType = 'text/plain';
 
   async export({ code }: ExportInput): Promise<Blob> {
-    return new Blob([applyPaletteForExport(code)], { type: this.mimeType });
+    return new Blob([code], { type: this.mimeType });
   }
 }
 
@@ -47,6 +51,10 @@ export interface ImageExportOptions {
   quality?: number;
   /** 최소 출력 폭(px) */
   minWidth?: number;
+  /**
+   * ExportInput.colorMode가 없을 때의 색상. 'ask'(기본값)면 내보낼 때마다 선택 창을 띄운다.
+   */
+  colorMode?: ColorMode | 'ask';
 }
 
 interface PreparedSvg {
@@ -81,24 +89,38 @@ export class RasterImageExport implements ExportStrategy {
       background: options.background === undefined ? '#ffffff' : options.background,
       quality: options.quality ?? 0.95,
       minWidth: options.minWidth ?? MIN_EXPORT_WIDTH,
+      colorMode: options.colorMode ?? 'ask',
     };
     if (id === 'jpg' && this.options.background === null) {
       this.options.background = '#ffffff';
     }
   }
 
-  async export({ svg, code }: ExportInput): Promise<Blob> {
+  async export({ svg, code, colorMode }: ExportInput): Promise<Blob> {
     if (!svg.trim()) {
       throw new Error('내보낼 다이어그램이 없습니다. 먼저 코드를 렌더링해 주세요.');
     }
 
+    const mode = await this.resolveColorMode(colorMode);
+    // 흑백 인쇄용일 때만 팔레트 색으로 바꾼다. 화면 색 그대로면 null.
+    const paletteCode = mode === 'grayscale' ? code : null;
+
     try {
-      return await this.rasterize(prepareSvg(svg, code, this.options.minWidth, false));
+      return await this.rasterize(prepareSvg(svg, paletteCode, this.options.minWidth, false));
     } catch (error) {
       if (!isTaintOrLoadError(error)) throw error;
       // foreignObject 때문에 실패한 경우: SVG <text>로 바꿔서 재시도한다.
-      return await this.rasterize(prepareSvg(svg, code, this.options.minWidth, true));
+      return await this.rasterize(prepareSvg(svg, paletteCode, this.options.minWidth, true));
     }
+  }
+
+  /** 색상: 호출 측이 정했으면 그대로, 아니면 옵션, 옵션이 'ask'면 선택 창. 취소하면 ExportCancelledError. */
+  private async resolveColorMode(requested: ColorMode | undefined): Promise<ColorMode> {
+    if (requested) return requested;
+    if (this.options.colorMode !== 'ask') return this.options.colorMode;
+    const chosen = await askColorMode(this.id);
+    if (!chosen) throw new ExportCancelledError();
+    return chosen;
   }
 
   private async rasterize({ xml, width, height }: PreparedSvg): Promise<Blob> {
@@ -125,11 +147,11 @@ export class RasterImageExport implements ExportStrategy {
  * - Mermaid 출력은 width="100%" + style="max-width:…" 형태라 <img>로 그리면 크기가 정해지지 않는다.
  *   viewBox를 기준으로 고정 width/height를 지정한다.
  * - 벡터 상태에서 목표 해상도로 키워야 래스터화 후 흐려지지 않는다.
- * - REQ-09: 사용자 지정 색을 흑백 인쇄용 팔레트 색으로 바꾼다 (화면 SVG는 그대로, 내보내는 사본만).
+ * - REQ-09: paletteCode가 있으면(흑백 인쇄용) 상자 색을 팔레트 색으로 바꾼다 (화면 SVG는 그대로, 내보내는 사본만).
  */
 function prepareSvg(
   svgText: string,
-  code: string,
+  paletteCode: string | null,
   minWidth: number,
   replaceForeignObjects: boolean,
 ): PreparedSvg {
@@ -158,7 +180,7 @@ function prepareSvg(
   svg.style.removeProperty('max-width');
 
   // 글자색을 span에 넣어 두므로, foreignObject 변환보다 먼저 해야 변환된 <text>에도 반영된다.
-  applyPaletteToSvg(svg, code);
+  if (paletteCode !== null) applyPaletteToSvg(svg, paletteCode);
   if (replaceForeignObjects) convertForeignObjectsToText(svg);
 
   return { xml: new XMLSerializer().serializeToString(svg), width, height };
