@@ -443,6 +443,7 @@ export class App {
     this.status.textContent =
       `노드 ${result.nodes}개 · 평균 ${result.avgFps}fps (최저 ${result.minFps}) · ` +
       `끝점 오차 최대 ${result.maxEndpointErrorPx}px · ${verdict}` +
+      (result.crowdedMoves > 0 ? ` (노드가 붙은 채 옮긴 ${result.crowdedMoves}회 포함)` : '') +
       (result.pageVisible ? '' : ' (탭이 가려져 fps 무효)');
   }
 
