@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeBenchmarkCode, summarizeFrames } from './benchmark';
+import { chooseClearDirection, makeBenchmarkCode, summarizeFrames } from './benchmark';
 
 describe('성능 측정 도우미', () => {
   it('측정용 다이어그램은 클래스 30개와 연결선 34개로 만든다', () => {
@@ -19,5 +19,21 @@ describe('성능 측정 도우미', () => {
 
   it('프레임이 없으면 0', () => {
     expect(summarizeFrames([])).toEqual({ avgFps: 0, minFps: 0, p95FrameMs: 0 });
+  });
+
+  it('옮긴 뒤 다른 노드와 겹치거나 붙지 않는 방향을 고른다', () => {
+    const rect = { x: 0, y: 0, width: 100, height: 50 };
+    const blockerBelow = { x: 0, y: 100, width: 100, height: 50 }; // 아래쪽에 다른 노드
+    const sequence = [0.25, 0.75]; // 첫 시도: 아래(90°) → 막힘, 둘째: 위(270°) → 통과
+    let i = 0;
+    const result = chooseClearDirection(rect, [blockerBelow], 90, () => sequence[i++ % sequence.length]);
+    expect(result.clear).toBe(true);
+    expect(result.angle).toBeCloseTo(Math.PI * 1.5);
+  });
+
+  it('어느 방향도 안 되면 clear: false', () => {
+    const rect = { x: 0, y: 0, width: 100, height: 50 };
+    const around = [{ x: -500, y: -500, width: 1100, height: 1050 }]; // 사방이 막힘
+    expect(chooseClearDirection(rect, around, 90, () => 0.1).clear).toBe(false);
   });
 });

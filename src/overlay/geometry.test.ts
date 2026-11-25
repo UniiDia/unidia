@@ -18,6 +18,7 @@ import {
   parseTranslate,
   pointAtHalfLength,
   polylinePath,
+  rectGap,
   trimRoute,
   rectBorderPoint,
   resizeFromBottomRight,
@@ -171,9 +172,24 @@ describe('화살촉 자리 띄우기', () => {
     expect(trimRoute(route, 10, 10)).toEqual([{ x: 0, y: 10 }, { x: 0, y: 100 }, { x: 90, y: 100 }]);
   });
 
+  it('노드 간격이 30px처럼 좁아도 화살촉이 들어갈 자리가 있으면 화살촉 전체만큼 띄운다 (REQ-04 1px 기준)', () => {
+    // 예전에는 선 길이의 45%까지만 띄워서 화살촉 끝이 노드 안쪽으로 3.75px 들어갔다
+    expect(trimRoute([{ x: 0, y: 0 }, { x: 0, y: 30 }], 17.25, 0)).toEqual([{ x: 0, y: 17.25 }, { x: 0, y: 30 }]);
+    expect(trimRoute([{ x: 0, y: 0 }, { x: 0, y: 20 }], 17.25, 0)[0].y).toBeCloseTo(17.25);
+  });
+
   it('구간이 짧아도 양 끝이 서로 지나치지 않는다', () => {
     const [start, end] = trimRoute([{ x: 0, y: 0 }, { x: 20, y: 0 }], 17.25, 17.25);
     expect(start.x).toBeLessThan(end.x);
+  });
+});
+
+describe('사각형 간격', () => {
+  it('떨어진 쪽 기준 간격, 겹치면 0 이하', () => {
+    const a = { x: 0, y: 0, width: 100, height: 50 };
+    expect(rectGap(a, { x: 0, y: 70, width: 100, height: 50 })).toBe(20); // 아래로 20px
+    expect(rectGap(a, { x: 130, y: 0, width: 10, height: 10 })).toBe(30); // 오른쪽으로 30px
+    expect(rectGap(a, { x: 50, y: 25, width: 100, height: 50 })).toBeLessThanOrEqual(0); // 겹침
   });
 });
 
