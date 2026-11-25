@@ -3,7 +3,6 @@ import type { OverlayCallbacks, OverlayLayer } from './OverlayLayer';
 import {
   type SizedLayout,
   assignEdgeKeys,
-  contentShift,
   decodeEdgePoints,
   distanceToRectBorder,
   findAttachedNode,
@@ -398,8 +397,7 @@ export class ClassDiagramOverlay implements OverlayLayer {
     const sx = width / node.base.width;
     const sy = height / node.base.height;
     const resized = Math.abs(sx - 1) > 1e-6 || Math.abs(sy - 1) > 1e-6;
-    /* 크기를 키우면 상자만 커지고, 글자와 칸 구분선은 원래 크기로 왼쪽 위 기준 자리를 지킨다. */
-    const shift = contentShift(node.base, node.current);
+    const fontScale = Math.min(sx, sy);
 
     for (const shape of node.shapes) {
       if (!resized) {
@@ -407,7 +405,7 @@ export class ClassDiagramOverlay implements OverlayLayer {
       } else if (shape.kind === 'box') {
         setTransform(shape.el, join(shape.original, `scale(${sx}, ${sy})`));
       } else {
-        setTransform(shape.el, join(shape.original, `translate(0, ${-shift.y}) scale(${sx}, 1)`));
+        setTransform(shape.el, join(shape.original, `scale(${sx}, ${sy})`));
       }
     }
     for (const text of node.texts) {
@@ -415,13 +413,11 @@ export class ClassDiagramOverlay implements OverlayLayer {
         setTransform(text.el, text.original);
         continue;
       }
-      /*
-       * REQ-06(폰트 스케일링) 연결 지점: 지금은 글자 크기를 그대로 두고 위치만 옮긴다.
-       * 도형 크기에 맞춰 글자를 키우려면 여기서 scale(...)을 덧붙이면 된다.
-       */
-      const tx = text.base.x - (text.centered ? 0 : shift.x);
-      const ty = text.base.y - shift.y;
-      text.el.setAttribute('transform', `translate(${tx}, ${ty})`);
+      const tx = text.centered
+        ? text.base.x * fontScale
+        : (text.base.x + node.base.width / 2) * fontScale - width / 2;
+      const ty = text.base.y * sy;
+      text.el.setAttribute('transform', `translate(${tx}, ${ty}) scale(${fontScale})`);
     }
   }
 
@@ -952,4 +948,4 @@ function setTransform(el: SVGGElement, value: string | null): void {
 function setDisplay(el: SVGElement, value: 'none' | null): void {
   if (value) el.setAttribute('display', value);
   else el.removeAttribute('display');
-}
+}
