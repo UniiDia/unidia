@@ -1,6 +1,7 @@
 import type { NodeLayout, Point } from '../core/DiagramModel';
 import type { OverlayCallbacks, OverlayLayer } from './OverlayLayer';
 import {
+  type Rect,
   type SizedLayout,
   assignEdgeKeys,
   contentShift,
@@ -880,6 +881,12 @@ export class ClassDiagramOverlay implements OverlayLayer {
   /* 화면에 있는 노드 이름 목록 */
   nodeIds(): string[] {
     return [...this.nodes.keys()];
+  }
+
+  /* 노드의 지금 위치·크기 (좌상단 기준) */
+  nodeRect(id: string): Rect | null {
+    const node = this.nodes.get(id);
+    return node ? layoutRect(node.current) : null;
   }
 
   /* 노드를 드래그한 것처럼 한 프레임 옮긴다. 모델에는 기록하지 않는다 (측정 후 다시 그리면 원래대로). */

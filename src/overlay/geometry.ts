@@ -151,17 +151,55 @@ export function trimRoute(route: readonly Point[], startTrim: number, endTrim: n
   const points = route.map((p) => ({ x: p.x, y: p.y }));
   const n = points.length;
   if (n < 2) return points;
-  points[0] = moveToward(route[0], route[1], startTrim);
-  points[n - 1] = moveToward(route[n - 1], route[n - 2], endTrim);
+
+  /*
+   * 화살촉이 들어갈 자리가 있으면 화살촉 길이 "전체"만큼 띄운다. 그래야 화살촉 끝이 정확히 노드 테두리에 닿는다 (REQ-04).
+   * 노드끼리 화살촉보다 가깝게 붙어 자리가 모자랄 때만, 선이 뒤집히지 않도록 비율대로 줄인다.
+   */
+  let start = startTrim;
+  let end = endTrim;
+  if (n === 2) {
+    const room = Math.max(0, distance(route[0], route[1]) - MIN_LINE_LENGTH);
+    if (start + end > room) {
+      const scale = room / (start + end);
+      start *= scale;
+      end *= scale;
+    }
+  } else {
+    start = Math.min(start, Math.max(0, distance(route[0], route[1]) - MIN_LINE_LENGTH));
+    end = Math.min(end, Math.max(0, distance(route[n - 1], route[n - 2]) - MIN_LINE_LENGTH));
+  }
+  points[0] = moveToward(route[0], route[1], start);
+  points[n - 1] = moveToward(route[n - 1], route[n - 2], end);
   return points;
 }
 
-/* from에서 to 쪽으로 distance만큼 옮긴 점 (구간 길이의 45%를 넘지 않게: 양 끝을 줄여도 서로 지나치지 않도록) */
-function moveToward(from: Point, to: Point, distance: number): Point {
-  const length = Math.hypot(to.x - from.x, to.y - from.y);
-  if (length === 0 || distance <= 0) return { x: from.x, y: from.y };
-  const t = Math.min(distance, length * 0.45) / length;
+/* 화살촉을 띄우고 나서도 남겨 둘 최소 선 길이 (선 방향이 있어야 화살촉 방향이 정해진다) */
+const MIN_LINE_LENGTH = 1;
+
+function distance(a: Point, b: Point): number {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+/* from에서 to 쪽으로 amount만큼 옮긴 점 */
+function moveToward(from: Point, to: Point, amount: number): Point {
+  const length = distance(from, to);
+  if (length === 0 || amount <= 0) return { x: from.x, y: from.y };
+  const t = Math.min(amount, length) / length;
   return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+}
+
+/*
+ * 두 사각형 사이의 간격 (가로·세로 중 떨어진 쪽 기준). 겹치면 0 이하.
+ * 성능 측정에서 노드를 옮길 때 다른 노드와 겹치거나 붙지 않는지 확인하는 데 쓴다.
+ */
+export function rectGap(a: Rect, b: Rect): number {
+  return Math.max(
+    b.x - (a.x + a.width),
+    a.x - (b.x + b.width),
+    b.y - (a.y + a.height),
+    a.y - (b.y + b.height),
+  );
 }
 
 /*

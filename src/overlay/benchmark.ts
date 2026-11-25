@@ -1,4 +1,5 @@
 import type { ClassDiagramOverlay } from './ClassDiagramOverlay';
+import { type Rect, rectGap } from './geometry';
 
 /*
  * 오버레이 성능·정확도 측정 (SRS 3.3 "노드 30개에서 드래그 60fps", REQ-04 "끝점이 노드 경계에서 1px 이내").
@@ -19,6 +20,8 @@ export interface BenchmarkResult {
   maxWorkMs: number;
   endpointChecks: number;
   maxEndpointErrorPx: number;
+  /* 다른 노드와 MIN_NODE_GAP_PX 이상 떨어지는 방향을 찾지 못해 붙은 채로 옮긴 횟수 (0이어야 정상) */
+  crowdedMoves: number;
   /* 측정 중 탭이 보이고 있었는지 (숨겨진 탭은 브라우저가 화면 갱신을 늦춰 fps가 의미 없다) */
   pageVisible: boolean;
   passFps: boolean;
@@ -28,6 +31,35 @@ export interface BenchmarkResult {
 /* 합격 기준: 평균 55fps 이상(SRS 3.3 잠정), 끝점 오차 1px 이내(REQ-04 잠정) */
 export const FPS_TARGET = 55;
 export const ENDPOINT_TOLERANCE_PX = 1;
+
+/*
+ * 측정 조건: 옮긴 노드가 다른 노드와 이 간격 이상 떨어지는 방향으로만 옮긴다.
+ * 노드끼리 겹치거나 화살촉 길이(약 17px)보다 가깝게 붙으면 화살촉이 들어갈 자리가 없어 끝점이 정의되지 않기 때문이다.
+ * (실제 편집에서도 노드를 겹쳐 두지는 않는다.)
+ */
+export const MIN_NODE_GAP_PX = 20;
+const MAX_DIRECTION_TRIES = 12;
+
+/*
+ * 노드를 total만큼 옮길 무작위 방향을 고른다. 옮긴 뒤 다른 노드들과 minGap 이상 떨어지는 방향을 tries번까지 찾고,
+ * 찾으면 clear: true. 못 찾으면 마지막으로 뽑은 방향과 clear: false.
+ */
+export function chooseClearDirection(
+  rect: Rect,
+  others: readonly Rect[],
+  total: number,
+  random: () => number,
+  minGap = MIN_NODE_GAP_PX,
+  tries = MAX_DIRECTION_TRIES,
+): { angle: number; clear: boolean } {
+  let angle = 0;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    angle = random() * Math.PI * 2;
+    const moved = { ...rect, x: rect.x + Math.cos(angle) * total, y: rect.y + Math.sin(angle) * total };
+    if (others.every((other) => rectGap(moved, other) >= minGap)) return { angle, clear: true };
+  }
+  return { angle, clear: false };
+}
 
 /* 측정용 클래스 다이어그램: 클래스 n개를 사슬로 잇고, 5개마다 상속 관계를 하나씩 더한다. */
 export function makeBenchmarkCode(nodeCount = 30): string {
@@ -70,8 +102,9 @@ export async function waitFor(condition: () => boolean, timeoutMs = 5000): Promi
 
 /*
  * 노드를 무작위로 골라 무작위 방향으로 끄는 동작을 moves번 흉내 낸다.
+ * 방향은 옮긴 뒤 다른 노드와 겹치거나 붙지 않는 쪽으로 고른다 (MIN_NODE_GAP_PX).
  * 한 번 끌 때 framesPerMove 프레임 동안 stepPx씩 옮기며 프레임 간격을 재고,
- * 다 끈 뒤에는 그 노드에 붙은 선의 끝점이 노드 테두리에서 얼마나 떨어졌는지 잰다.
+ * 다 끈 뒤에는 그 노드에 붙은 선의 끝(화살촉 끝)이 노드 테두리에서 얼마나 떨어졌는지 잰다.
  */
 export async function runOverlayBenchmark(
   overlay: ClassDiagramOverlay,
@@ -85,12 +118,15 @@ export async function runOverlayBenchmark(
   const workMs: number[] = [];
   let endpointChecks = 0;
   let maxEndpointError = 0;
+  let crowdedMoves = 0;
   let pageVisible = document.visibilityState === 'visible';
 
   let last = await nextFrame();
   for (let move = 0; move < moves; move++) {
     const id = ids[Math.floor(random() * ids.length)];
-    const angle = random() * Math.PI * 2;
+    const others = ids.filter((other) => other !== id).map((other) => overlay.nodeRect(other)!);
+    const { angle, clear } = chooseClearDirection(overlay.nodeRect(id)!, others, stepPx * framesPerMove, random);
+    if (!clear) crowdedMoves++;
     const dx = Math.cos(angle) * stepPx;
     const dy = Math.sin(angle) * stepPx;
 
@@ -121,6 +157,7 @@ export async function runOverlayBenchmark(
     maxWorkMs: round(Math.max(...workMs), 3),
     endpointChecks,
     maxEndpointErrorPx,
+    crowdedMoves,
     pageVisible,
     passFps: frames.avgFps >= FPS_TARGET,
     passEndpoint: maxEndpointErrorPx <= ENDPOINT_TOLERANCE_PX,
