@@ -22,7 +22,7 @@
 | REQ-08 | RQ-09 | PNG/JPG, .mmd 내보내기 | `ExportStrategy.test.ts` 12개 (폭 2000px 이상 계산, 비율 유지, `ExportSizeError`, 경계값) | Chrome·Edge에서 PNG/JPG 2000×2498px 통과 (11/22, `docs/measurements/2026-11-22/`) | 심현보 | ✅ |
 | REQ-09 | RQ-11 | 흑백 인쇄 시 4색 구분 | `palette.test.ts` 22개 (4색 명도 차 L\* 20 이상, 글자 대비 50 이상), `svgPalette.test.ts` 3개 | 그레이스케일로 변환해 4가지 색이 구분되는지 눈으로 확인. 현재는 항상 흑백 팔레트 적용 | 심현보 | ✅ |
 | REQ-10 | RQ-0301 | 코드 영역과 캔버스 항상 함께 표시 | — | 화면을 열어 코드 영역과 캔버스가 동시에 보이는지 확인 | 박주영 | 🟡 확인 기록 필요 |
-| REQ-11 | RQ-10 | 실행 취소(Ctrl+Z)/다시 실행(Ctrl+Y)과 단축키 | `Command.test.ts` 8개, `shortcuts.test.ts` 10개 (Ctrl+Z/Y, Ctrl+Shift+Z, Ctrl+S, Ctrl+O, Cmd, 복사·붙여넣기는 기본 동작) | 코드 수정·노드 이동 후 Ctrl+Z/Y 동작 확인 | 임상진 · 박주영 | ✅ |
+| REQ-11 | RQ-10 | 실행 취소(Ctrl+Z)/다시 실행(Ctrl+Y, Ctrl+Shift+Z), 저장(Ctrl+S)·불러오기(Ctrl+O) 단축키 (macOS는 Cmd) | `Command.test.ts` 8개, `shortcuts.test.ts` 10개 (Ctrl+Z/Y, Ctrl+Shift+Z, Ctrl+S, Ctrl+O, Cmd, 복사·붙여넣기는 기본 동작) | 코드 수정·노드 이동 후 Ctrl+Z/Y·Ctrl+Shift+Z 동작, Ctrl+S는 브라우저 저장창 없이 JSON 내려받기, Ctrl+O는 파일 선택 창 열림 (11/25 Chromium에서 통과, 발표 PC 확인 예정) | 임상진 · 박주영 | ✅ |
 | REQ-12 | RQ-08 | JSON 저장·불러오기 | `DiagramModel.test.ts` 11개 (복원, 형식·버전 검사, 실패 시 상태 유지), `diagramFile.test.ts` 6개 (복원, 편집 기록 비움, 구독자 알림, 오류 메시지, 5MB·빈 파일) | 저장한 파일을 불러와 같은 화면이 나오는지, 잘못된 파일은 거부되는지 확인 | 임상진 · 박주영 | ✅ |
 
 ## 비기능 요구사항
