@@ -45,7 +45,7 @@ UniDia는 코드로 큰 그림을 빠르게 그리고, GUI로 세부를 UMLet �
 | REQ-08 | 고해상도 PNG/JPG 이미지 및 Mermaid 코드(.mmd)로 내보내기 | 상 |
 | REQ-09 | 흑백(그레이스케일) 인쇄 시에도 최소 4가지 색상이 구분됨 | 중 |
 | REQ-10 | 코드 편집 영역은 항상 GUI 캔버스와 함께 표시 | 상 |
-| REQ-11 | 편집 동작 실행 취소(Ctrl+Z) / 다시 실행(Ctrl+Y) | 중 |
+| REQ-11 | 편집 동작 실행 취소(Ctrl+Z) / 다시 실행(Ctrl+Y, Ctrl+Shift+Z), 저장(Ctrl+S)·불러오기(Ctrl+O) 단축키 (macOS는 Cmd) | 중 |
 | REQ-12 | 다이어그램을 JSON 파일로 저장하고 불러오기 | 상 |
 
 ### 비기능 요구사항
