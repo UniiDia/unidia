@@ -119,7 +119,7 @@ for (const type of ['class', 'sequence'] as const) {
 
 test('문법 오류·미지원 입력 후 복구하고 배율을 유지한다', async ({ page }) => {
   await page.getByRole('combobox', { name: '다이어그램 배율' }).selectOption('2');
-  for (const source of ['classDiagram\nA <|--', 'flowchart TD\nA-->B', '']) {
+  for (const source of ['classDiagram\nA <|--', 'unknown TD\nA-->B', '']) {
     await page.getByRole('textbox', { name: 'Mermaid 코드' }).fill(source);
     await expect(page.getByRole('alert')).toBeVisible();
     await expect(page.locator('.canvas-pane > svg')).toHaveCount(0);

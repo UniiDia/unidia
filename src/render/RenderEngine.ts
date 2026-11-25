@@ -1,5 +1,5 @@
 import mermaid from 'mermaid';
-import { detectDiagramType, type DiagramType } from './diagramTypes';
+import { diagramLabels, detectDiagramType, type DiagramType } from './diagramTypes';
 
 export interface RenderResult {
   svg: string;
@@ -34,7 +34,7 @@ export class RenderEngine {
   async render(code: string): Promise<RenderResult> {
     const type = detectDiagramType(code);
     if (!type) {
-      throw new Error('지원하지 않는 다이어그램입니다. classDiagram 또는 sequenceDiagram으로 시작해 주세요.');
+      throw new Error(`지원하지 않는 다이어그램입니다. 지원 유형: ${Object.values(diagramLabels).join(', ')}`);
     }
     this.init();
     const id = `unidia-render-${renderId++}`;
