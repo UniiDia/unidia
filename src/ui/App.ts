@@ -7,17 +7,19 @@ import {
 } from '../core/Command';
 import { DiagramModel } from '../core/DiagramModel';
 import { exportStrategies } from '../export/ExportStrategy';
+import { ChartDragOverlay } from '../overlay/ChartDragOverlay';
 import { ClassDiagramOverlay } from '../overlay/ClassDiagramOverlay';
 import type { OverlayCallbacks } from '../overlay/OverlayLayer';
 import { SequenceDiagramOverlay } from '../overlay/SequenceDiagramOverlay';
 import { moveMessage, reconnectMessage } from '../overlay/sequenceCode';
 import { makeBenchmarkCode, runOverlayBenchmark, waitFor } from '../overlay/benchmark';
-import type { DiagramType } from '../render/diagramTypes';
+import { diagramLabels, type DiagramType } from '../render/diagramTypes';
 import { RenderEngine, type RenderResult } from '../render/RenderEngine';
 import { RenderScheduler } from '../render/RenderScheduler';
 import { SvgViewport } from '../render/SvgViewport';
 import { serializeDiagram } from '../render/serializeDiagram';
 import { parseEdgeKey, reconnectEdge } from '../overlay/reconnect';
+import { templates } from './templates';
 import { BatchCommand } from './BatchCommand';
 import {
   checkDiagramFileSize,
@@ -46,7 +48,7 @@ const HISTORY_DEBOUNCE_MS = 400;
 /** 주소 끝에 ?bench 를 붙이면 성능 측정 버튼이 나온다 (개발·검증용). */
 const BENCHMARK_MODE = new URLSearchParams(location.search).has('bench');
 
-const HINTS: Record<DiagramType, string> = {
+const HINTS: Partial<Record<DiagramType, string>> = {
   class: '노드 드래그: 이동 · □ 핸들: 크기 조절 · 선 드래그: 꺾기 · 꺾임점 더블클릭: 삭제 · 선 끝 ■ 드래그: 다시 연결',
   sequence: '참여자 드래그: 좌우 이동 · 메시지 드래그: 간격 조정, 다른 메시지를 넘어가면 순서 변경 · 메시지 끝 ■ 드래그: 보낸이·받는이 변경',
 };
@@ -82,6 +84,7 @@ export class App {
   });
   /** 드래그 미리보기 중에는 오버레이가 이미 화면을 그렸으므로 다시 그리지 않는다. */
   private previewing = false;
+  private chartOverlay = new ChartDragOverlay(this.overlayCallbacks);
   private viewport = new SvgViewport();
   private scheduler = new RenderScheduler(this.engine, {
     onSuccess: (result, startedAt) => this.showRender(result, startedAt),
@@ -109,6 +112,7 @@ export class App {
   mount(): void {
     this.root.innerHTML = `
       <div class="toolbar">
+        <button data-action="templates">템플릿</button>
         <button data-action="undo">실행 취소 (Ctrl+Z)</button>
         <button data-action="redo">다시 실행 (Ctrl+Y)</button>
         <button data-action="save">저장 (Ctrl+S)</button>
@@ -133,6 +137,13 @@ export class App {
         </label>
         <span class="status" role="status"></span>
       </div>
+      <dialog class="templates" aria-labelledby="templates-title">
+        <h2 id="templates-title">템플릿 선택</h2>
+        <div class="template-grid">${templates.map((item, i) =>
+          `<button type="button" data-template="${i}"><small>${item.type}</small><strong>${item.title}</strong></button>`
+        ).join('')}</div>
+        <form method="dialog"><button>닫기</button></form>
+      </dialog>
       <div class="panes">
         <div class="code-pane"><textarea aria-label="Mermaid 코드" spellcheck="false"></textarea></div>
         <div class="canvas-pane" aria-label="다이어그램 미리보기"></div>
@@ -168,6 +179,19 @@ export class App {
     });
 
     this.textarea.addEventListener('input', () => this.onCodeInput());
+    const dialog = this.root.querySelector<HTMLDialogElement>('dialog.templates')!;
+    this.root.querySelector('[data-action="templates"]')!.addEventListener('click', () => dialog.showModal());
+    dialog.querySelectorAll<HTMLButtonElement>('[data-template]').forEach(button => {
+      button.addEventListener('click', () => {
+        this.flushPendingInput();
+        const code = templates[Number(button.dataset.template)].code;
+        if (code !== this.committedCode) {
+          this.history.execute(new SetCodeCommand(this.model, this.committedCode, code));
+          this.updateButtons();
+        }
+        dialog.close();
+      });
+    });
     this.undoButton.addEventListener('click', () => this.runAction('undo'));
     this.redoButton.addEventListener('click', () => this.runAction('redo'));
     this.root.querySelector('[data-action="save"]')!.addEventListener('click', () => this.runAction('save'));
@@ -322,7 +346,7 @@ export class App {
       this.canvas.setAttribute('aria-busy', 'false');
       this.status.dataset.state = 'success';
       this.status.dataset.renderMs = String(elapsed);
-      this.status.textContent = `${type === 'class' ? '클래스' : '시퀀스'} · 반영 ${Math.round(elapsed)}ms`;
+      this.status.textContent = `${diagramLabels[type]} · 반영 ${Math.round(elapsed)}ms`;
     }));
   }
 
@@ -332,18 +356,23 @@ export class App {
     this.viewport.detach();
     if (!this.lastSvg) return;
     this.canvas.innerHTML = this.lastSvg;
-    this.hint.textContent = this.lastType ? HINTS[this.lastType] : '';
+    this.hint.textContent = this.lastType ? (HINTS[this.lastType] ?? '도형이나 연결선을 드래그해 위치를 조정하세요.') : '';
     const svg = this.canvas.querySelector('svg');
     if (!svg || !this.lastType) return;
     const { nodeLayouts, edgePaths } = this.model.getState();
-    const overlay = this.lastType === 'class' ? this.overlay : this.sequenceOverlay;
-    overlay.attach(svg, nodeLayouts, edgePaths);
+    if (this.lastType === 'class' || this.lastType === 'sequence') {
+      const overlay = this.lastType === 'class' ? this.overlay : this.sequenceOverlay;
+      overlay.attach(svg, nodeLayouts, edgePaths);
+    } else {
+      this.chartOverlay.attach(svg, this.lastType, nodeLayouts);
+    }
     this.viewport.attach(svg);
   }
 
   private detachOverlays(): void {
     this.overlay.detach();
     this.sequenceOverlay.detach();
+    this.chartOverlay.detach();
   }
 
   private preview(apply: () => void): void {

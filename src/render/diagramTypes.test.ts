@@ -12,7 +12,7 @@ describe('detectDiagramType (REQ-07)', () => {
   });
 
   it('지원하지 않는 유형이나 빈 입력은 null', () => {
-    expect(detectDiagramType('flowchart TD\n A-->B')).toBeNull();
+    expect(detectDiagramType('unknown TD\n A-->B')).toBeNull();
     expect(detectDiagramType('')).toBeNull();
     expect(detectDiagramType('%% 주석만')).toBeNull();
   });
@@ -20,6 +20,10 @@ describe('detectDiagramType (REQ-07)', () => {
   it.each([
     ['\uFEFF\r\n%% 한글 주석\r\nclassDiagram\r\nclass 사용자', 'class'],
     [' \n%% 첫 주석\n%% 두 번째 주석\nsequenceDiagram\nA->>B: hi', 'sequence'],
+    ['flowchart TD\nA-->B', 'flowchart'],
+    ['graph LR\nA-->B', 'flowchart'],
+    ['stateDiagram-v2\n[*] --> A', 'state'],
+    ['erDiagram\nUSER ||--o{ ORDER : places', 'er'],
     ['classDiagram; A <|-- B', 'class'],
     ['classDiagram-v2\nclass A', 'class'],
     ['---\ntitle: 수강 신청\nconfig:\n  theme: neutral\n---\nclassDiagram\nclass 학생', 'class'],
@@ -32,10 +36,6 @@ describe('detectDiagramType (REQ-07)', () => {
   it.each([
     ' \t\r\n',
     '%% 주석\n%% 다른 주석\n',
-    'flowchart TD\nA-->B',
-    'graph LR\nA-->B',
-    'stateDiagram-v2\n[*] --> A',
-    'erDiagram\nUSER ||--o{ ORDER : places',
     'classDiagramWrong\nclass A',
     'sequenceDiagramXYZ\nA->>B: hi',
     '---\ntitle: 닫히지 않은 메타데이터\nclassDiagram',
