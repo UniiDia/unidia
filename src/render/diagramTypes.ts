@@ -1,8 +1,5 @@
-export const diagramLabels = { class: '클래스', sequence: '시퀀스', flowchart: '흐름도', state: '상태', er: 'ER', pie: '원형 차트',
-  gantt: '간트 차트', timeline: '타임라인', journey: '사용자 여정', gitGraph: 'Git 그래프', quadrantChart: '사분면 차트',
-  'xychart-beta': 'XY 차트', mindmap: '마인드맵', kanban: '칸반', requirementDiagram: '요구사항',
-  'sankey-beta': 'Sankey', 'radar-beta': '레이더 차트', C4Context: 'C4', 'block-beta': '블록' } as const;
-export type DiagramType = keyof typeof diagramLabels;
+/** 지원하는 다이어그램 유형 (REQ-07: 클래스, 시퀀스 2종). */
+export type DiagramType = 'class' | 'sequence';
 
 /**
  * Mermaid 코드의 첫 유효 줄로 다이어그램 유형을 판별한다.
@@ -31,12 +28,5 @@ export function detectDiagramType(code: string): DiagramType | null {
 
   if (/^classDiagram(?:-v2)?(?=\s|;|$)/.test(source)) return 'class';
   if (/^sequenceDiagram(?=\s|;|$)/.test(source)) return 'sequence';
-  if (/^(flowchart|graph)(?=\s|$)/.test(source)) return 'flowchart';
-  if (/^stateDiagram(?:-v2)?(?=\s|$)/.test(source)) return 'state';
-  if (/^erDiagram(?=\s|$)/.test(source)) return 'er';
-  if (/^pie(?=\s|$)/.test(source)) return 'pie';
-  for (const type of ['gantt', 'timeline', 'journey', 'gitGraph', 'quadrantChart', 'xychart-beta', 'mindmap', 'kanban', 'requirementDiagram', 'sankey-beta', 'radar-beta', 'C4Context', 'block-beta'] as const) {
-    if (source.split(/\s/, 1)[0] === type) return type;
-  }
   return null;
 }

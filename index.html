@@ -12,16 +12,6 @@
       .toolbar .sep { width: 1px; height: 20px; background: #ddd; }
       .toolbar .hint { margin-left: 8px; color: #888; font-size: 12px; }
       .toolbar .status { margin-left: auto; color: #666; font-size: 13px; }
-      .templates { width: min(28rem, 92vw); border: 1px solid #ccd4db; border-radius: 12px; padding: 20px; }
-      .templates::backdrop { background: #19273866; }
-      .templates h2 { margin: 0 0 16px; font-size: 1.15rem; }
-      .template-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-      .template-grid button { display: grid; gap: 6px; padding: 16px; text-align: left; border: 1px solid #b8c7d0; border-radius: 6px; background: #f6fafc; cursor: pointer; }
-      .template-grid button:hover, .template-grid button:focus-visible { background: #e4f1fa; }
-      .templates form { margin-top: 16px; text-align: right; }
-      .canvas-pane svg:has([data-chart-part]) { overflow: visible; }
-      svg.unidia-editable [data-chart-part] { cursor: grab; pointer-events: visiblePainted; }
-      svg.unidia-editable [data-chart-part]:active { cursor: grabbing; }
       .panes { display: flex; flex: 1; min-height: 0; }
       /* REQ-10: 코드 영역과 캔버스는 항상 함께 표시 */
       .code-pane { width: 40%; border-right: 1px solid #ddd; display: flex; }
